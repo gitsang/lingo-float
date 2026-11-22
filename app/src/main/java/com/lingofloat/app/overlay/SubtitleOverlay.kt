@@ -22,8 +22,10 @@ import kotlin.math.abs
 
 /**
  * 全局悬浮双语字幕窗：可拖动、可折叠、可关闭。
- * 紧凑模式：仅两行（原文一行 + 译文一行），隐藏标题栏/状态行；
- * 拖动窗口任意位置移动，长按 500ms 恢复标准模式。
+ * 任意模式下按住窗口任意位置均可拖动（移动超过触摸阈值判定为拖动，
+ * 未超过则放行给按钮点击）。
+ * 紧凑模式：仅两行（原文一行 + 译文一行），隐藏标题栏/状态行，
+ * 长按 500ms 恢复标准模式。
  * 所有视图操作都切到主线程执行。
  */
 class SubtitleOverlay(
@@ -57,7 +59,7 @@ class SubtitleOverlay(
             if (root != null) return@post
 
             val pad = dp(12)
-            val container = LinearLayout(context).apply {
+            val container = DragLayout(context).apply {
                 orientation = LinearLayout.VERTICAL
                 setBackgroundResource(R.drawable.bg_overlay)
                 setPadding(pad, dp(6), pad, pad)
@@ -152,62 +154,6 @@ class SubtitleOverlay(
             }
             params = p
 
-            // 拖动
-            var downX = 0f
-            var downY = 0f
-            var startX = 0
-            var startY = 0
-            handle.setOnTouchListener { _, ev ->
-                when (ev.actionMasked) {
-                    MotionEvent.ACTION_DOWN -> {
-                        downX = ev.rawX; downY = ev.rawY
-                        startX = p.x; startY = p.y
-                        true
-                    }
-                    MotionEvent.ACTION_MOVE -> {
-                        p.x = startX + (ev.rawX - downX).toInt()
-                        p.y = startY + (ev.rawY - downY).toInt()
-                        runCatching { wm.updateViewLayout(container, p) }
-                        true
-                    }
-                    else -> false
-                }
-            }
-
-            // 紧凑模式：整窗可拖动，长按恢复标准模式
-            var moved = false
-            container.setOnTouchListener { _, ev ->
-                if (!compact) return@setOnTouchListener false
-                when (ev.actionMasked) {
-                    MotionEvent.ACTION_DOWN -> {
-                        downX = ev.rawX; downY = ev.rawY
-                        startX = p.x; startY = p.y
-                        moved = false
-                        main.postDelayed(exitCompact, 500)
-                        true
-                    }
-                    MotionEvent.ACTION_MOVE -> {
-                        val dx = ev.rawX - downX
-                        val dy = ev.rawY - downY
-                        if (abs(dx) > touchSlop || abs(dy) > touchSlop) {
-                            moved = true
-                            main.removeCallbacks(exitCompact)
-                        }
-                        if (moved) {
-                            p.x = startX + dx.toInt()
-                            p.y = startY + dy.toInt()
-                            runCatching { wm.updateViewLayout(container, p) }
-                        }
-                        true
-                    }
-                    MotionEvent.ACTION_UP, MotionEvent.ACTION_CANCEL -> {
-                        main.removeCallbacks(exitCompact)
-                        true
-                    }
-                    else -> false
-                }
-            }
-
             root = container
             applyCompactLayout()
             runCatching { wm.addView(container, p) }
@@ -270,6 +216,67 @@ class SubtitleOverlay(
             statusTv = null
             contentGroup = null
             collapseBtn = null
+        }
+    }
+
+    /**
+     * 整窗拖动容器：通过触摸拦截区分点击与拖动——
+     * 移动超过 touchSlop 才拦截并拖动窗口，否则事件照常传给子 View（按钮可点）。
+     * 紧凑模式下长按 500ms 恢复标准模式。
+     */
+    @SuppressLint("ClickableViewAccessibility")
+    private inner class DragLayout(context: Context) : LinearLayout(context) {
+        private var downX = 0f
+        private var downY = 0f
+        private var startX = 0
+        private var startY = 0
+        private var dragging = false
+
+        private fun begin(ev: MotionEvent) {
+            downX = ev.rawX; downY = ev.rawY
+            startX = params?.x ?: 0; startY = params?.y ?: 0
+            dragging = false
+            if (compact) main.postDelayed(exitCompact, 500)
+        }
+
+        private fun move(ev: MotionEvent): Boolean {
+            val dx = ev.rawX - downX
+            val dy = ev.rawY - downY
+            if (!dragging && (abs(dx) > touchSlop || abs(dy) > touchSlop)) {
+                dragging = true
+                main.removeCallbacks(exitCompact)
+            }
+            if (dragging) {
+                params?.let { p ->
+                    p.x = startX + dx.toInt()
+                    p.y = startY + dy.toInt()
+                    runCatching { wm.updateViewLayout(this, p) }
+                }
+            }
+            return dragging
+        }
+
+        private fun end() {
+            main.removeCallbacks(exitCompact)
+            dragging = false
+        }
+
+        override fun onInterceptTouchEvent(ev: MotionEvent): Boolean {
+            when (ev.actionMasked) {
+                MotionEvent.ACTION_DOWN -> begin(ev)
+                MotionEvent.ACTION_MOVE -> if (move(ev)) return true
+                MotionEvent.ACTION_UP, MotionEvent.ACTION_CANCEL -> end()
+            }
+            return false
+        }
+
+        override fun onTouchEvent(ev: MotionEvent): Boolean {
+            when (ev.actionMasked) {
+                MotionEvent.ACTION_DOWN -> begin(ev)
+                MotionEvent.ACTION_MOVE -> move(ev)
+                MotionEvent.ACTION_UP, MotionEvent.ACTION_CANCEL -> end()
+            }
+            return true
         }
     }
 }

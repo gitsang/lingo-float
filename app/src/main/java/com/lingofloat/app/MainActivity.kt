@@ -170,7 +170,7 @@ class MainActivity : ComponentActivity() {
                 SwitchRow("字幕显示原文", s.showOriginal) { s = s.copy(showOriginal = it) }
                 SwitchRow("紧凑模式（悬浮窗仅两行）", s.compactMode) { s = s.copy(compactMode = it) }
                 Text(
-                    "紧凑模式：原文/译文各一行，隐藏标题栏；拖动窗口移动，长按恢复标准模式。也可点悬浮窗标题栏的「紧凑」快速切换。",
+                    "紧凑模式：原文/译文各一行，隐藏标题栏，长按恢复标准模式。任意模式下按住悬浮窗任意位置均可拖动，按钮点击不受影响。",
                     fontSize = 11.sp, color = Color.Gray
                 )
                 OutlinedTextField(
