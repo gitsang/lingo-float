@@ -43,6 +43,7 @@ data class AppSettings(
     val source: String = SOURCE_MIC,
     val ttsEnabled: Boolean = false,
     val showOriginal: Boolean = true,
+    val compactMode: Boolean = false,
     val fontSize: Int = 18,
     val targetLang: String = "简体中文",
     val whisper: ApiConfig = ApiConfig("https://api.openai.com/v1", "", "whisper-1"),
@@ -72,6 +73,7 @@ class SettingsStore(context: Context) {
                 source = o.optString("source", def.source),
                 ttsEnabled = o.optBoolean("ttsEnabled", def.ttsEnabled),
                 showOriginal = o.optBoolean("showOriginal", def.showOriginal),
+                compactMode = o.optBoolean("compactMode", def.compactMode),
                 fontSize = o.optInt("fontSize", def.fontSize),
                 targetLang = o.optString("targetLang", def.targetLang),
                 whisper = ApiConfig.fromJson(o.optJSONObject("whisper"), def.whisper),
@@ -90,6 +92,7 @@ class SettingsStore(context: Context) {
             .put("source", s.source)
             .put("ttsEnabled", s.ttsEnabled)
             .put("showOriginal", s.showOriginal)
+            .put("compactMode", s.compactMode)
             .put("fontSize", s.fontSize)
             .put("targetLang", s.targetLang)
             .put("whisper", s.whisper.toJson())

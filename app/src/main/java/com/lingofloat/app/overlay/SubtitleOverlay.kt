@@ -11,14 +11,19 @@ import android.util.TypedValue
 import android.view.Gravity
 import android.view.MotionEvent
 import android.view.View
+import android.view.ViewConfiguration
 import android.view.WindowManager
 import android.widget.LinearLayout
 import android.widget.TextView
 import com.lingofloat.app.AppSettings
 import com.lingofloat.app.R
+import com.lingofloat.app.SettingsStore
+import kotlin.math.abs
 
 /**
  * 全局悬浮双语字幕窗：可拖动、可折叠、可关闭。
+ * 紧凑模式：仅两行（原文一行 + 译文一行），隐藏标题栏/状态行；
+ * 拖动窗口任意位置移动，长按 500ms 恢复标准模式。
  * 所有视图操作都切到主线程执行。
  */
 class SubtitleOverlay(
@@ -30,13 +35,18 @@ class SubtitleOverlay(
     private val main = Handler(Looper.getMainLooper())
 
     private var root: LinearLayout? = null
+    private var handle: LinearLayout? = null
     private var originalTv: TextView? = null
     private var translatedTv: TextView? = null
     private var statusTv: TextView? = null
     private var contentGroup: LinearLayout? = null
     private var collapseBtn: TextView? = null
     private var collapsed = false
+    private var compact = settings.compactMode
     private var params: WindowManager.LayoutParams? = null
+
+    private val touchSlop = ViewConfiguration.get(context).scaledTouchSlop
+    private val exitCompact = Runnable { setCompact(false) }
 
     private fun dp(v: Int): Int =
         TypedValue.applyDimension(TypedValue.COMPLEX_UNIT_DIP, v.toFloat(), context.resources.displayMetrics).toInt()
@@ -64,6 +74,13 @@ class SubtitleOverlay(
                 textSize = 12f
                 layoutParams = LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f)
             }
+            val compactBtn = TextView(context).apply {
+                text = "紧凑"
+                setTextColor(Color.parseColor("#CCFFFFFF"))
+                textSize = 12f
+                setPadding(dp(10), dp(6), dp(10), dp(6))
+                setOnClickListener { setCompact(true) }
+            }
             val collapse = TextView(context).apply {
                 text = "收起"
                 setTextColor(Color.parseColor("#CCFFFFFF"))
@@ -80,8 +97,10 @@ class SubtitleOverlay(
                 setOnClickListener { onClose() }
             }
             handle.addView(title)
+            handle.addView(compactBtn)
             handle.addView(collapse)
             handle.addView(close)
+            this.handle = handle
 
             val content = LinearLayout(context).apply { orientation = LinearLayout.VERTICAL }
 
@@ -155,8 +174,70 @@ class SubtitleOverlay(
                 }
             }
 
-            runCatching { wm.addView(container, p) }
+            // 紧凑模式：整窗可拖动，长按恢复标准模式
+            var moved = false
+            container.setOnTouchListener { _, ev ->
+                if (!compact) return@setOnTouchListener false
+                when (ev.actionMasked) {
+                    MotionEvent.ACTION_DOWN -> {
+                        downX = ev.rawX; downY = ev.rawY
+                        startX = p.x; startY = p.y
+                        moved = false
+                        main.postDelayed(exitCompact, 500)
+                        true
+                    }
+                    MotionEvent.ACTION_MOVE -> {
+                        val dx = ev.rawX - downX
+                        val dy = ev.rawY - downY
+                        if (abs(dx) > touchSlop || abs(dy) > touchSlop) {
+                            moved = true
+                            main.removeCallbacks(exitCompact)
+                        }
+                        if (moved) {
+                            p.x = startX + dx.toInt()
+                            p.y = startY + dy.toInt()
+                            runCatching { wm.updateViewLayout(container, p) }
+                        }
+                        true
+                    }
+                    MotionEvent.ACTION_UP, MotionEvent.ACTION_CANCEL -> {
+                        main.removeCallbacks(exitCompact)
+                        true
+                    }
+                    else -> false
+                }
+            }
+
             root = container
+            applyCompactLayout()
+            runCatching { wm.addView(container, p) }
+        }
+    }
+
+    /** 切换紧凑模式并持久化 */
+    fun setCompact(on: Boolean) {
+        compact = on
+        main.post { applyCompactLayout() }
+        runCatching {
+            SettingsStore(context).save(settings.copy(compactMode = on))
+        }
+    }
+
+    private fun applyCompactLayout() {
+        val on = compact
+        handle?.visibility = if (on) View.GONE else View.VISIBLE
+        statusTv?.visibility = if (on) View.GONE else View.VISIBLE
+        originalTv?.maxLines = if (on) 1 else 3
+        translatedTv?.maxLines = if (on) 1 else 6
+        translatedTv?.setPadding(0, dp(if (on) 2 else 4), 0, 0)
+        root?.setPadding(
+            dp(if (on) 10 else 12), dp(if (on) 4 else 6),
+            dp(if (on) 10 else 12), dp(if (on) 6 else 12)
+        )
+        if (!on) {
+            collapsed = false
+            contentGroup?.visibility = View.VISIBLE
+            collapseBtn?.text = "收起"
         }
     }
 
@@ -180,8 +261,10 @@ class SubtitleOverlay(
 
     fun remove() {
         main.post {
+            main.removeCallbacks(exitCompact)
             root?.let { runCatching { wm.removeView(it) } }
             root = null
+            handle = null
             originalTv = null
             translatedTv = null
             statusTv = null
