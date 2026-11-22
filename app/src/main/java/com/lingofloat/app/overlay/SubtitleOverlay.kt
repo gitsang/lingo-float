@@ -173,6 +173,21 @@ class SubtitleOverlay(
         val on = compact
         handle?.visibility = if (on) View.GONE else View.VISIBLE
         statusTv?.visibility = if (on) View.GONE else View.VISIBLE
+        // 紧凑模式：单行 + 跑马灯自动滚动（isSelected 使无焦点悬浮窗也能滚动）
+        listOfNotNull(originalTv, translatedTv).forEach { tv ->
+            if (on) {
+                tv.setSingleLine(true)
+                tv.ellipsize = TextUtils.TruncateAt.MARQUEE
+                tv.marqueeRepeatLimit = -1
+                tv.setHorizontallyScrolling(true)
+                tv.isSelected = true
+            } else {
+                tv.setSingleLine(false)
+                tv.setHorizontallyScrolling(false)
+                tv.ellipsize = TextUtils.TruncateAt.END
+                tv.isSelected = false
+            }
+        }
         originalTv?.maxLines = if (on) 1 else 3
         translatedTv?.maxLines = if (on) 1 else 6
         translatedTv?.setPadding(0, dp(if (on) 2 else 4), 0, 0)
