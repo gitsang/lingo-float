@@ -193,6 +193,20 @@ class MainActivity : ComponentActivity() {
                     onValueChange = { s = s.copy(vadThreshold = it.toInt()) },
                     valueRange = 100f..1200f
                 )
+                Text("最长分段：${s.maxSegmentSec}s（连续说话强制断句，越小字幕越碎）", fontSize = 13.sp)
+                Slider(
+                    value = s.maxSegmentSec.toFloat(),
+                    onValueChange = { s = s.copy(maxSegmentSec = it.toInt()) },
+                    valueRange = 3f..15f,
+                    steps = 11
+                )
+                Text("请求超时：${s.requestTimeoutSec}s（单个 API 请求总时长上限，超时自动跳过）", fontSize = 13.sp)
+                Slider(
+                    value = s.requestTimeoutSec.toFloat(),
+                    onValueChange = { s = s.copy(requestTimeoutSec = it.toInt()) },
+                    valueRange = 10f..120f,
+                    steps = 10
+                )
             }
 
             // ---- Whisper ----

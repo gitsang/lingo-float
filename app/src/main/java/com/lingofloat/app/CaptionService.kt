@@ -140,10 +140,15 @@ class CaptionService : Service() {
     }
 
     private fun startPipeline(settings: AppSettings) {
-        val whisper = WhisperClient(settings.whisper, settings.whisperLang)
-        val translator = TranslateClient(settings.translate, settings.targetLang)
-        val ttsClient = ttsPlayer?.let { TtsClient(settings.tts, settings.ttsVoice, settings.ttsSpeed) }
-        val segmenter = VadSegmenter(threshold = settings.vadThreshold)
+        val whisper = WhisperClient(settings.whisper, settings.whisperLang, settings.requestTimeoutSec)
+        val translator = TranslateClient(settings.translate, settings.targetLang, settings.requestTimeoutSec)
+        val ttsClient = ttsPlayer?.let {
+            TtsClient(settings.tts, settings.ttsVoice, settings.ttsSpeed, settings.requestTimeoutSec)
+        }
+        val segmenter = VadSegmenter(
+            threshold = settings.vadThreshold,
+            maxSegmentMs = settings.maxSegmentSec * 1000
+        )
         val channel = Channel<ByteArray>(Channel.UNLIMITED)
         segmentChannel = channel
 

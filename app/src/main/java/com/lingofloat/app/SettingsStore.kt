@@ -52,7 +52,9 @@ data class AppSettings(
     val tts: ApiConfig = ApiConfig("https://api.openai.com/v1", "", "tts-1"),
     val ttsVoice: String = "alloy",
     val ttsSpeed: Float = 1.0f,
-    val vadThreshold: Int = 300
+    val vadThreshold: Int = 300,
+    val requestTimeoutSec: Int = 30,
+    val maxSegmentSec: Int = 8
 ) {
     companion object {
         const val SOURCE_MIC = "mic"
@@ -82,7 +84,9 @@ class SettingsStore(context: Context) {
                 tts = ApiConfig.fromJson(o.optJSONObject("tts"), def.tts),
                 ttsVoice = o.optString("ttsVoice", def.ttsVoice),
                 ttsSpeed = o.optDouble("ttsSpeed", def.ttsSpeed.toDouble()).toFloat(),
-                vadThreshold = o.optInt("vadThreshold", def.vadThreshold)
+                vadThreshold = o.optInt("vadThreshold", def.vadThreshold),
+                requestTimeoutSec = o.optInt("requestTimeoutSec", def.requestTimeoutSec),
+                maxSegmentSec = o.optInt("maxSegmentSec", def.maxSegmentSec)
             )
         }.getOrDefault(AppSettings())
     }
@@ -102,6 +106,8 @@ class SettingsStore(context: Context) {
             .put("ttsVoice", s.ttsVoice)
             .put("ttsSpeed", s.ttsSpeed.toDouble())
             .put("vadThreshold", s.vadThreshold)
+            .put("requestTimeoutSec", s.requestTimeoutSec)
+            .put("maxSegmentSec", s.maxSegmentSec)
         prefs.edit().putString("settings", o.toString()).apply()
     }
 }

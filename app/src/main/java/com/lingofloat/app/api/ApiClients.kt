@@ -12,11 +12,17 @@ import java.io.IOException
 import java.util.concurrent.TimeUnit
 
 object Http {
-    val client: OkHttpClient = OkHttpClient.Builder()
+    private val base: OkHttpClient = OkHttpClient.Builder()
         .connectTimeout(15, TimeUnit.SECONDS)
         .readTimeout(90, TimeUnit.SECONDS)
         .writeTimeout(90, TimeUnit.SECONDS)
         .build()
+
+    /** callTimeout = 单次请求总时长上限（含连接/上传/等待/下载），防止卡死整条流水线 */
+    fun clientFor(timeoutSec: Int): OkHttpClient =
+        base.newBuilder()
+            .callTimeout(timeoutSec.coerceIn(5, 300).toLong(), TimeUnit.SECONDS)
+            .build()
 
     internal fun auth(req: Request.Builder, cfg: ApiConfig): Request.Builder {
         if (cfg.apiKey.isNotBlank()) req.header("Authorization", "Bearer ${cfg.apiKey}")
@@ -27,7 +33,8 @@ object Http {
 /** OpenAI 兼容 /audio/transcriptions（Whisper） */
 class WhisperClient(
     private val cfg: ApiConfig,
-    private val language: String = ""
+    private val language: String = "",
+    private val timeoutSec: Int = 30
 ) {
     fun transcribe(wav: ByteArray): String {
         val body = MultipartBody.Builder()
@@ -42,7 +49,7 @@ class WhisperClient(
             Request.Builder().url(cfg.normalizedBase() + "/audio/transcriptions").post(body),
             cfg
         ).build()
-        Http.client.newCall(req).execute().use { resp ->
+        Http.clientFor(timeoutSec).newCall(req).execute().use { resp ->
             val text = resp.body?.string().orEmpty()
             if (!resp.isSuccessful) {
                 throw IOException("Whisper HTTP ${resp.code}: ${text.take(200)}")
@@ -57,7 +64,8 @@ class WhisperClient(
 /** OpenAI 兼容 /chat/completions，用于翻译 */
 class TranslateClient(
     private val cfg: ApiConfig,
-    private val targetLang: String
+    private val targetLang: String,
+    private val timeoutSec: Int = 30
 ) {
     private val systemPrompt =
         "你是专业的同声传译引擎。把用户给出的内容翻译成$targetLang。" +
@@ -77,7 +85,7 @@ class TranslateClient(
                 .post(payload.toString().toRequestBody("application/json".toMediaType())),
             cfg
         ).build()
-        Http.client.newCall(req).execute().use { resp ->
+        Http.clientFor(timeoutSec).newCall(req).execute().use { resp ->
             val body = resp.body?.string().orEmpty()
             if (!resp.isSuccessful) {
                 throw IOException("翻译 HTTP ${resp.code}: ${body.take(200)}")
@@ -97,7 +105,8 @@ class TranslateClient(
 class TtsClient(
     private val cfg: ApiConfig,
     private val voice: String,
-    private val speed: Float
+    private val speed: Float,
+    private val timeoutSec: Int = 30
 ) {
     fun synthesize(text: String): ByteArray {
         val payload = JSONObject()
@@ -112,7 +121,7 @@ class TtsClient(
                 .post(payload.toString().toRequestBody("application/json".toMediaType())),
             cfg
         ).build()
-        Http.client.newCall(req).execute().use { resp ->
+        Http.clientFor(timeoutSec).newCall(req).execute().use { resp ->
             if (!resp.isSuccessful) {
                 throw IOException("TTS HTTP ${resp.code}: ${resp.body?.string()?.take(200)}")
             }
