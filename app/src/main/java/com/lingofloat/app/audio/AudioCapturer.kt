@@ -8,21 +8,22 @@ import android.media.AudioRecord
 import android.media.MediaRecorder
 import android.media.projection.MediaProjection
 import android.os.Process
+import com.lingofloat.app.Strings
 
 const val SAMPLE_RATE = 16000
 private const val CHANNEL = AudioFormat.CHANNEL_IN_MONO
 private const val ENCODING = AudioFormat.ENCODING_PCM_16BIT
 
-/** 统一采集接口：16kHz / 单声道 / PCM16 */
+/** Common capture interface: 16kHz / mono / PCM16. */
 interface AudioCapturer {
     fun start()
-    /** 阻塞读取，返回字节数；<=0 表示出错或结束 */
+    /** Blocking read; returns byte count, <=0 means error or end. */
     fun read(buf: ByteArray): Int
     fun stop()
 }
 
-/** 麦克风采集（VOICE_RECOGNITION 音源，面向语音识别优化） */
-class MicCapturer : AudioCapturer {
+/** Microphone capture (VOICE_RECOGNITION source, tuned for speech recognition). */
+class MicCapturer(private val t: Strings) : AudioCapturer {
     private var record: AudioRecord? = null
 
     @SuppressLint("MissingPermission")
@@ -35,7 +36,7 @@ class MicCapturer : AudioCapturer {
         )
         if (r.state != AudioRecord.STATE_INITIALIZED) {
             r.release()
-            throw IllegalStateException("AudioRecord 初始化失败（麦克风被占用？）")
+            throw IllegalStateException(t.micInitFailed)
         }
         r.startRecording()
         record = r
@@ -51,11 +52,14 @@ class MicCapturer : AudioCapturer {
 }
 
 /**
- * 内部音频采集（Android 10+ AudioPlaybackCapture）。
- * 仅捕获允许被录制的 App 的 MEDIA/GAME/UNKNOWN 音频；
- * excludeUid 排除本应用自身，避免 TTS 译文被再次识别造成回环。
+ * Internal audio capture (Android 10+ AudioPlaybackCapture).
+ * Only captures MEDIA/GAME/UNKNOWN audio from apps that allow capture;
+ * excludeUid removes this app itself so TTS output is never re-transcribed.
  */
-class InternalCapturer(private val projection: MediaProjection) : AudioCapturer {
+class InternalCapturer(
+    private val projection: MediaProjection,
+    private val t: Strings
+) : AudioCapturer {
     private var record: AudioRecord? = null
 
     @SuppressLint("MissingPermission")
@@ -79,7 +83,7 @@ class InternalCapturer(private val projection: MediaProjection) : AudioCapturer 
             .build()
         if (r.state != AudioRecord.STATE_INITIALIZED) {
             r.release()
-            throw IllegalStateException("内录 AudioRecord 初始化失败")
+            throw IllegalStateException(t.internalInitFailed)
         }
         r.startRecording()
         record = r

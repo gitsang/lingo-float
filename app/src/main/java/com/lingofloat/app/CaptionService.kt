@@ -34,8 +34,9 @@ import kotlinx.coroutines.channels.Channel
 import kotlinx.coroutines.launch
 
 /**
- * 核心前台服务：采集 → VAD 分段 → Whisper → 翻译 → 悬浮字幕 / TTS。
- * 识别+翻译在单消费者协程里串行执行，保证字幕顺序。
+ * Core foreground service: capture -> VAD segmentation -> Whisper -> translate
+ * -> overlay captions / TTS. Recognition and translation run serially in a
+ * single consumer coroutine so captions stay in order.
  */
 class CaptionService : Service() {
 
@@ -65,13 +66,16 @@ class CaptionService : Service() {
     @Volatile
     private var stopping = false
 
+    private var t = Strings.of(Strings.EN)
+
     override fun onBind(intent: Intent?): IBinder? = null
 
     override fun onCreate() {
         super.onCreate()
+        t = Strings.of(SettingsStore(this).load().language)
         val nm = getSystemService(NotificationManager::class.java)
         nm.createNotificationChannel(
-            NotificationChannel(CHANNEL_ID, "实时字幕", NotificationManager.IMPORTANCE_LOW)
+            NotificationChannel(CHANNEL_ID, t.notifChannel, NotificationManager.IMPORTANCE_LOW)
         )
     }
 
@@ -83,9 +87,10 @@ class CaptionService : Service() {
         if (isRunning) return START_NOT_STICKY
 
         val settings = SettingsStore(this).load()
+        t = Strings.of(settings.language)
         val source = intent.getStringExtra(EXTRA_SOURCE) ?: AppSettings.SOURCE_MIC
 
-        // Android 14: 必须先以对应类型 startForeground，再 getMediaProjection
+        // Android 14: startForeground with the proper type BEFORE getMediaProjection
         val fgType = if (source == AppSettings.SOURCE_INTERNAL)
             ServiceInfo.FOREGROUND_SERVICE_TYPE_MEDIA_PROJECTION
         else
@@ -97,8 +102,8 @@ class CaptionService : Service() {
         overlay = SubtitleOverlay(this, settings) { stopEverything() }.also { it.show() }
 
         if (!settings.whisper.isConfigured || !settings.translate.isConfigured) {
-            overlay?.setStatus("请先在 App 中配置 Whisper 与翻译 API")
-            overlay?.setTranslation("未配置 API")
+            overlay?.setStatus(t.configureFirst)
+            overlay?.setTranslation(t.notConfigured)
             return START_NOT_STICKY
         }
 
@@ -114,24 +119,24 @@ class CaptionService : Service() {
             if (source == AppSettings.SOURCE_INTERNAL) {
                 val code = intent.getIntExtra(EXTRA_RESULT_CODE, 0)
                 val data = IntentCompat.getParcelableExtra(intent, EXTRA_RESULT_DATA, Intent::class.java)
-                    ?: throw IllegalStateException("缺少 MediaProjection 授权数据")
+                    ?: throw IllegalStateException(t.missingProjection)
                 val mpm = getSystemService(MediaProjectionManager::class.java)
                 val p = mpm.getMediaProjection(code, data)
-                    ?: throw IllegalStateException("MediaProjection 创建失败")
+                    ?: throw IllegalStateException(t.projectionFailed)
                 p.registerCallback(object : MediaProjection.Callback() {
                     override fun onStop() {
                         stopEverything()
                     }
                 }, Handler(Looper.getMainLooper()))
                 projection = p
-                capturer = InternalCapturer(p)
+                capturer = InternalCapturer(p, t)
             } else {
-                capturer = MicCapturer()
+                capturer = MicCapturer(t)
             }
         } catch (e: Exception) {
-            Log.e(TAG, "采集初始化失败", e)
-            overlay?.setTranslation("启动失败")
-            overlay?.setStatus(e.message ?: "未知错误")
+            Log.e(TAG, "Capture init failed", e)
+            overlay?.setTranslation(t.startFailed)
+            overlay?.setStatus(e.message ?: "unknown")
             return START_NOT_STICKY
         }
 
@@ -152,32 +157,32 @@ class CaptionService : Service() {
         val channel = Channel<ByteArray>(Channel.UNLIMITED)
         segmentChannel = channel
 
-        // 串行消费者：识别 → 翻译 → 字幕 → TTS
+        // Serial consumer: transcribe -> translate -> captions -> TTS
         scope.launch {
             for (seg in channel) {
                 if (stopping) break
                 try {
-                    overlay?.setStatus("识别中…")
+                    overlay?.setStatus(t.transcribing)
                     val text = whisper.transcribe(WavUtil.pcmToWav(seg))
                     if (text.isBlank()) {
-                        overlay?.setStatus("聆听中…")
+                        overlay?.setStatus(t.listening)
                         continue
                     }
                     overlay?.setOriginal(text)
-                    overlay?.setStatus("翻译中…")
+                    overlay?.setStatus(t.translating)
                     val translated = translator.translate(text)
                     overlay?.setTranslation(translated.ifBlank { text })
-                    overlay?.setStatus("聆听中…")
+                    overlay?.setStatus(t.listening)
                     if (ttsClient != null && translated.isNotBlank()) {
                         try {
                             ttsPlayer?.enqueue(ttsClient.synthesize(translated))
                         } catch (e: Exception) {
-                            Log.w(TAG, "TTS 失败", e)
+                            Log.w(TAG, "TTS failed", e)
                         }
                     }
                 } catch (e: Exception) {
-                    Log.w(TAG, "处理失败", e)
-                    overlay?.setStatus("出错：${(e.message ?: "未知").take(120)}")
+                    Log.w(TAG, "Pipeline error", e)
+                    overlay?.setStatus(String.format(t.errorFmt, (e.message ?: "unknown").take(120)))
                 }
             }
         }
@@ -186,7 +191,7 @@ class CaptionService : Service() {
         captureThread = Thread({
             try {
                 cap.start()
-                overlay?.setStatus("聆听中…")
+                overlay?.setStatus(t.listening)
                 val buf = ByteArray(3200) // 100ms
                 while (!stopping) {
                     val n = cap.read(buf)
@@ -197,8 +202,8 @@ class CaptionService : Service() {
                 }
                 segmenter.flush()?.let { channel.trySend(it) }
             } catch (e: Exception) {
-                Log.e(TAG, "采集线程异常", e)
-                overlay?.setStatus("采集失败：${(e.message ?: "未知").take(120)}")
+                Log.e(TAG, "Capture thread error", e)
+                overlay?.setStatus(String.format(t.captureFailedFmt, (e.message ?: "unknown").take(120)))
             }
         }, "audio-capture").apply { start() }
     }
@@ -251,11 +256,11 @@ class CaptionService : Service() {
         )
         return NotificationCompat.Builder(this, CHANNEL_ID)
             .setSmallIcon(R.drawable.ic_notification)
-            .setContentTitle("LingoFloat 实时字幕运行中")
-            .setContentText("正在监听音频并生成双语字幕")
+            .setContentTitle(t.notifTitle)
+            .setContentText(t.notifText)
             .setOngoing(true)
             .setContentIntent(contentIntent)
-            .addAction(0, "停止", stopIntent)
+            .addAction(0, t.stop, stopIntent)
             .build()
     }
 }

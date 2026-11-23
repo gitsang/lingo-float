@@ -18,7 +18,7 @@ object Http {
         .writeTimeout(90, TimeUnit.SECONDS)
         .build()
 
-    /** callTimeout = 单次请求总时长上限（含连接/上传/等待/下载），防止卡死整条流水线 */
+    /** callTimeout = hard cap on total request time (connect/upload/wait/download). */
     fun clientFor(timeoutSec: Int): OkHttpClient =
         base.newBuilder()
             .callTimeout(timeoutSec.coerceIn(5, 300).toLong(), TimeUnit.SECONDS)
@@ -30,7 +30,7 @@ object Http {
     }
 }
 
-/** OpenAI 兼容 /audio/transcriptions（Whisper） */
+/** OpenAI-compatible /audio/transcriptions (Whisper-style STT). */
 class WhisperClient(
     private val cfg: ApiConfig,
     private val language: String = "",
@@ -54,23 +54,24 @@ class WhisperClient(
             if (!resp.isSuccessful) {
                 throw IOException("Whisper HTTP ${resp.code}: ${text.take(200)}")
             }
-            // 标准返回 {"text": "..."}；个别服务返回纯文本
+            // Standard response is {"text": "..."}; some servers return plain text
             return runCatching { JSONObject(text).optString("text") }
                 .getOrDefault(text).trim()
         }
     }
 }
 
-/** OpenAI 兼容 /chat/completions，用于翻译 */
+/** OpenAI-compatible /chat/completions used for translation. */
 class TranslateClient(
     private val cfg: ApiConfig,
     private val targetLang: String,
     private val timeoutSec: Int = 30
 ) {
     private val systemPrompt =
-        "你是专业的同声传译引擎。把用户给出的内容翻译成$targetLang。" +
-        "只输出译文本身，不要解释、不要引号、不要注音。" +
-        "如果内容已经是$targetLang，原样输出。保留专有名词的常见写法，口语保持自然。"
+        "You are a professional simultaneous interpreter. Translate the user's content into $targetLang. " +
+        "Output only the translation itself: no explanations, no quotes, no transliteration. " +
+        "If the content is already in $targetLang, output it unchanged. " +
+        "Keep common spellings of proper nouns and keep spoken language natural."
 
     fun translate(text: String): String {
         val payload = JSONObject()
@@ -88,7 +89,7 @@ class TranslateClient(
         Http.clientFor(timeoutSec).newCall(req).execute().use { resp ->
             val body = resp.body?.string().orEmpty()
             if (!resp.isSuccessful) {
-                throw IOException("翻译 HTTP ${resp.code}: ${body.take(200)}")
+                throw IOException("Translate HTTP ${resp.code}: ${body.take(200)}")
             }
             val content = JSONObject(body)
                 .optJSONArray("choices")
@@ -101,7 +102,7 @@ class TranslateClient(
     }
 }
 
-/** OpenAI 兼容 /audio/speech（TTS），返回 mp3 字节 */
+/** OpenAI-compatible /audio/speech (TTS); returns mp3 bytes. */
 class TtsClient(
     private val cfg: ApiConfig,
     private val voice: String,
@@ -109,10 +110,13 @@ class TtsClient(
     private val timeoutSec: Int = 30
 ) {
     fun synthesize(text: String): ByteArray {
+        // SiliconFlow expects "model:voice"; accept a bare voice name as well.
+        val voiceId = if (cfg.provider == ApiConfig.PROVIDER_SILICONFLOW && !voice.contains(":"))
+            "${cfg.model}:$voice" else voice
         val payload = JSONObject()
             .put("model", cfg.model)
             .put("input", text)
-            .put("voice", voice)
+            .put("voice", voiceId)
             .put("response_format", "mp3")
             .put("speed", speed.toDouble())
         val req = Http.auth(
@@ -125,7 +129,7 @@ class TtsClient(
             if (!resp.isSuccessful) {
                 throw IOException("TTS HTTP ${resp.code}: ${resp.body?.string()?.take(200)}")
             }
-            return resp.body?.bytes() ?: throw IOException("TTS 返回空音频")
+            return resp.body?.bytes() ?: throw IOException("TTS returned empty audio")
         }
     }
 }

@@ -18,15 +18,16 @@ import android.widget.TextView
 import com.lingofloat.app.AppSettings
 import com.lingofloat.app.R
 import com.lingofloat.app.SettingsStore
+import com.lingofloat.app.Strings
 import kotlin.math.abs
 
 /**
- * 全局悬浮双语字幕窗：可拖动、可折叠、可关闭。
- * 任意模式下按住窗口任意位置均可拖动（移动超过触摸阈值判定为拖动，
- * 未超过则放行给按钮点击）。
- * 紧凑模式：仅两行（原文一行 + 译文一行），隐藏标题栏/状态行，
- * 长按 500ms 恢复标准模式。
- * 所有视图操作都切到主线程执行。
+ * Global floating bilingual caption window: draggable, collapsible, closable.
+ * Press and drag anywhere in either mode (movement beyond touch slop is a drag;
+ * otherwise the event is passed through to button clicks).
+ * Compact mode: two lines only (one original + one translation), title bar and
+ * status line hidden; long-press 500ms to restore full mode.
+ * All view operations are posted to the main thread.
  */
 class SubtitleOverlay(
     private val context: Context,
@@ -35,6 +36,7 @@ class SubtitleOverlay(
 ) {
     private val wm = context.getSystemService(WindowManager::class.java)
     private val main = Handler(Looper.getMainLooper())
+    private val t = Strings.of(settings.language)
 
     private var root: LinearLayout? = null
     private var handle: LinearLayout? = null
@@ -65,7 +67,7 @@ class SubtitleOverlay(
                 setPadding(pad, dp(6), pad, pad)
             }
 
-            // 标题栏（拖动把手 + 折叠 + 关闭）
+            // Title bar (drag handle + compact + collapse + close)
             val handle = LinearLayout(context).apply {
                 orientation = LinearLayout.HORIZONTAL
                 gravity = Gravity.CENTER_VERTICAL
@@ -77,14 +79,14 @@ class SubtitleOverlay(
                 layoutParams = LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f)
             }
             val compactBtn = TextView(context).apply {
-                text = "紧凑"
+                text = t.compact
                 setTextColor(Color.parseColor("#CCFFFFFF"))
                 textSize = 12f
                 setPadding(dp(10), dp(6), dp(10), dp(6))
                 setOnClickListener { setCompact(true) }
             }
             val collapse = TextView(context).apply {
-                text = "收起"
+                text = t.collapse
                 setTextColor(Color.parseColor("#CCFFFFFF"))
                 textSize = 12f
                 setPadding(dp(10), dp(6), dp(10), dp(6))
@@ -108,7 +110,7 @@ class SubtitleOverlay(
 
             val original = TextView(context).apply {
                 setTextColor(Color.parseColor("#FFB0BEC5"))
-                textSize = 13f
+                textSize = settings.originalFontSize.toFloat()
                 maxLines = 3
                 ellipsize = TextUtils.TruncateAt.END
                 visibility = if (settings.showOriginal) View.VISIBLE else View.GONE
@@ -120,13 +122,13 @@ class SubtitleOverlay(
                 maxLines = 6
                 ellipsize = TextUtils.TruncateAt.END
                 setPadding(0, dp(4), 0, 0)
-                text = "等待语音…"
+                text = t.waitingVoice
             }
             val status = TextView(context).apply {
                 setTextColor(Color.parseColor("#80FFFFFF"))
                 textSize = 11f
                 setPadding(0, dp(4), 0, 0)
-                text = "聆听中…"
+                text = t.listening
             }
             content.addView(original)
             content.addView(translated)
@@ -160,7 +162,7 @@ class SubtitleOverlay(
         }
     }
 
-    /** 切换紧凑模式并持久化 */
+    /** Toggle compact mode and persist the choice. */
     fun setCompact(on: Boolean) {
         compact = on
         main.post { applyCompactLayout() }
@@ -173,7 +175,8 @@ class SubtitleOverlay(
         val on = compact
         handle?.visibility = if (on) View.GONE else View.VISIBLE
         statusTv?.visibility = if (on) View.GONE else View.VISIBLE
-        // 紧凑模式：单行 + 跑马灯自动滚动（isSelected 使无焦点悬浮窗也能滚动）
+        // Compact: single line + marquee auto-scroll (isSelected keeps the
+        // marquee running even in a non-focusable overlay window)
         listOfNotNull(originalTv, translatedTv).forEach { tv ->
             if (on) {
                 tv.setSingleLine(true)
@@ -198,14 +201,14 @@ class SubtitleOverlay(
         if (!on) {
             collapsed = false
             contentGroup?.visibility = View.VISIBLE
-            collapseBtn?.text = "收起"
+            collapseBtn?.text = t.collapse
         }
     }
 
     private fun toggleCollapse() {
         collapsed = !collapsed
         contentGroup?.visibility = if (collapsed) View.GONE else View.VISIBLE
-        collapseBtn?.text = if (collapsed) "展开" else "收起"
+        collapseBtn?.text = if (collapsed) t.expand else t.collapse
     }
 
     fun setOriginal(text: String) {
@@ -235,9 +238,10 @@ class SubtitleOverlay(
     }
 
     /**
-     * 整窗拖动容器：通过触摸拦截区分点击与拖动——
-     * 移动超过 touchSlop 才拦截并拖动窗口，否则事件照常传给子 View（按钮可点）。
-     * 紧凑模式下长按 500ms 恢复标准模式。
+     * Whole-window drag container: distinguishes clicks from drags via touch
+     * interception — only intercept once movement exceeds touchSlop, otherwise
+     * events flow to child views (buttons stay clickable).
+     * In compact mode a 500ms long-press restores full mode.
      */
     @SuppressLint("ClickableViewAccessibility")
     private inner class DragLayout(context: Context) : LinearLayout(context) {

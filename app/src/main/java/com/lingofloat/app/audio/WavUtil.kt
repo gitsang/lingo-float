@@ -4,7 +4,7 @@ import java.io.ByteArrayOutputStream
 import java.nio.ByteBuffer
 import java.nio.ByteOrder
 
-/** PCM16 → WAV（44 字节 RIFF 头） */
+/** PCM16 -> WAV (44-byte RIFF header). */
 object WavUtil {
     fun pcmToWav(pcm: ByteArray, sampleRate: Int = SAMPLE_RATE, channels: Int = 1): ByteArray {
         val byteRate = sampleRate * channels * 2

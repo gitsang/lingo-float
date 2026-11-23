@@ -1,107 +1,125 @@
 # LingoFloat
 
-**Android 实时翻译悬浮字幕** —— 监听手机内部音频或麦克风，实时在屏幕悬浮窗显示双语字幕，可选同步朗读译文（TTS）。
+**Real-time translation captions for Android** — listens to internal phone audio or the microphone and shows bilingual subtitles in a floating overlay, with optional spoken translation (TTS).
 
-识别、翻译、语音合成三个环节全部走 **OpenAI 兼容 API**，地址 / Key / 模型各自独立配置，可随意混搭官方服务、第三方中转或自建模型。
+Recognition, translation and speech synthesis all go through **OpenAI-compatible APIs**. Each stage has its own provider / base URL / API key / model, so you can freely mix official services, third-party gateways or self-hosted models.
 
-## 功能
+## Features
 
-- 🎧 **双音源**
-  - **麦克风**：环境声、外放、面对面交谈
-  - **内部音频**：直接捕获其他 App 播放的声音（视频、播客、直播），Android 10+ `AudioPlaybackCapture`
-- 💬 **悬浮双语字幕**：全局悬浮窗，原文 + 译文同屏显示，可折叠、可关闭，字号可调；**任意模式按住窗口任意位置即可拖动**（自动区分点击与拖动，按钮不受影响）
-- 📏 **紧凑模式**：悬浮窗仅两行高度（原文/译文各一行），超出一行自动横向滚动（跑马灯循环）；隐藏标题栏与状态行；长按 500ms 恢复标准模式；标题栏「紧凑」按钮或设置页开关切换，选择自动保存
-- 🔊 **译文朗读**：可选 TTS 实时播放译文，队列自动丢弃积压保证实时性；内录模式自动排除自身声音，不会"自己翻自己"
-- ⚙️ **三组独立 API 配置**（均为 OpenAI 协议）：
-  | 环节 | 端点 | 默认模型示例 |
+- 🎧 **Two audio sources**
+  - **Microphone**: ambient sound, speaker playback, face-to-face conversation
+  - **Internal audio**: capture what other apps play (videos, podcasts, streams) via Android 10+ `AudioPlaybackCapture`
+- 💬 **Floating bilingual captions**: global overlay with original + translation, collapsible and closable; **press and drag anywhere to move** (clicks vs. drags are distinguished automatically, buttons stay clickable)
+- 📏 **Compact mode**: two lines only (one original + one translation); long lines auto-scroll as a marquee; title bar and status line hidden; long-press 500ms to restore full mode; the choice is persisted
+- 🔊 **Spoken translation**: optional TTS playback with a backlog-dropping queue to stay real-time; internal capture excludes the app's own audio so TTS is never re-transcribed
+- ⚙️ **Three independent API configs** (all OpenAI protocol):
+
+  | Stage | Endpoint | Default model |
   |---|---|---|
-  | 语音识别 | `POST /audio/transcriptions` | `whisper-1` |
-  | 翻译 | `POST /chat/completions` | `gpt-4o-mini` |
-  | 语音合成 | `POST /audio/speech` | `tts-1` |
-- 🌍 目标语言任意填写（简体中文 / English / 日本語…），源语言可指定或自动检测
-- ⏱️ **请求超时保护**：每个 API 请求有总时长上限（默认 30s，10–120s 可调），超时自动放弃该段继续后续，不会卡死流水线
-- ✂️ **自适应断句**：VAD 噪声底自动跟踪背景音，说话一停即断句；最长分段默认 8s（3–15s 可调），连续说话也会强制切段
-- 🔒 API Key 仅保存在本机 SharedPreferences，不上传任何第三方
+  | Speech recognition | `POST /audio/transcriptions` | `FunAudioLLM/SenseVoiceSmall` |
+  | Translation | `POST /chat/completions` | `Qwen/Qwen2.5-7B-Instruct` |
+  | Speech synthesis | `POST /audio/speech` | `FunAudioLLM/CosyVoice2-0.5B` |
 
-## 工作原理
+- 🏭 **Provider presets**: SiliconFlow (default), OpenAI, or any OpenAI-compatible endpoint — picking a provider fills the base URL, which stays editable
+- ⏱️ **Request timeout protection**: hard cap on total request time (default 30s); a stuck request is skipped without blocking the pipeline
+- ✂️ **Adaptive segmentation**: the VAD noise floor tracks background audio, so a pause in speech ends the segment immediately; max segment length defaults to 8s (3–15s adjustable)
+- 🌍 **i18n**: English (default) and Chinese, switchable in Settings; any target language can be typed in (简体中文 / English / 日本語…)
+- 🔒 API keys are stored on-device only and never sent to third parties
+
+## How it works
 
 ```
-麦克风 / 内部音频 (16kHz PCM)
-        │
-   能量 VAD 分段（静音 600ms 断句，最长 15s，带 240ms pre-roll）
-        │
-   Whisper API ──→ 原文 ──→ 悬浮窗上行
-        │
-   Chat Completions ──→ 译文 ──→ 悬浮窗下行
-        │
-   TTS API（可选）──→ mp3 队列顺序播放
+Microphone / internal audio (16kHz PCM)
+        |
+   Energy VAD segmentation (600ms silence cuts, max 8s, 240ms pre-roll,
+   adaptive noise floor for background music)
+        |
+   Whisper-style API --> original text --> overlay line 1
+        |
+   Chat Completions  --> translation --> overlay line 2
+        |
+   TTS API (optional) --> mp3 queue, sequential playback
 ```
 
-- 前台服务保活（`mediaProjection` / `microphone` 类型），通知栏一键停止
-- 识别 + 翻译在单协程内串行，保证字幕顺序不乱
+- Foreground service (`mediaProjection` / `microphone` type) with a one-tap Stop action in the notification
+- Recognition + translation run serially in one coroutine so captions never arrive out of order
 
-## 构建
+## Build
 
-环境要求：**JDK 17**、Android SDK（compileSdk 34）、Gradle 8.7+（仓库自带 wrapper）。
+Requirements: **JDK 17**, Android SDK (compileSdk 34), Gradle 8.7+ (wrapper included).
 
 ```bash
-# Android Studio 直接打开本目录，或命令行：
+# Open the project in Android Studio, or from the command line:
 ./gradlew assembleDebug
-# 产物：app/build/outputs/apk/debug/app-debug.apk
+# Output: app/build/outputs/apk/debug/app-debug.apk
 adb install app/build/outputs/apk/debug/app-debug.apk
 ```
 
-国内网络已预置阿里云 Maven 镜像与腾讯 Gradle 镜像，开箱即拉。
+Mirrors for China are preconfigured (Aliyun Maven, Tencent Gradle distribution).
 
-- `minSdk 29`（Android 10，内录 API 的最低要求）
+- `minSdk 29` (Android 10 — the minimum for audio playback capture)
 - `targetSdk 34`
 
-## 使用
+## Usage
 
-1. 打开 App，填写三组 API 配置（TTS 不用可留空并关闭开关），点 **保存配置**
-2. 选择音源：麦克风 / 内部音频
-3. 点 **开始**，按提示授权：
-   - 悬浮窗权限（跳转系统设置）
-   - 录音权限
-   - 通知权限（Android 13+）
-   - 内部音频模式：系统录屏授权弹窗（仅用于音频捕获，不录画面）
-4. 悬浮窗出现双语字幕；拖标题栏移动，"收起"折叠，"✕"或通知栏"停止"结束
+1. Open the app and fill in the API sections (leave TTS empty and its switch off if you don't need it), then **Save settings**
+2. Pick the audio source: microphone / internal audio
+3. Tap **Start** and grant the prompted permissions:
+   - Overlay permission (opens system settings)
+   - Microphone permission
+   - Notification permission (Android 13+)
+   - Internal audio mode: the system capture consent dialog (audio only, no screen recording is stored)
+4. Bilingual captions appear in the overlay. Drag anywhere to move; "Compact" shrinks it to two lines; long-press in compact mode restores full mode; "✕" or the notification's Stop action ends the session.
 
-### API 配置示例
+### Settings page layout
 
-Base URL 填到 `/v1` 即可（只填域名会自动补 `/v1`）：
+| Section | Contents |
+|---|---|
+| Status | Running state + Start/Stop, target language, speak translation (TTS) |
+| Audio | Audio source, trigger threshold, max segment length |
+| Overlay | Compact mode, show original, original font size, translation font size |
+| Speech recognition | Provider, base URL, API key, model, source language |
+| Translation | Provider, base URL, API key, model |
+| Speech synthesis | Provider, base URL, API key, model, voice, speech rate |
+| Settings | Language (English / 中文), save |
 
-| 服务 | 语音识别 | 翻译 | TTS |
+### Provider examples
+
+Base URLs are filled up to `/v1` (a bare host gets `/v1` appended automatically):
+
+| Service | Recognition | Translation | TTS |
 |---|---|---|---|
-| OpenAI 官方 | `https://api.openai.com/v1` + `whisper-1` | 同左 + `gpt-4o-mini` | 同左 + `tts-1` |
-| Groq（识别极快） | `https://api.groq.com/openai/v1` + `whisper-large-v3-turbo` | 同左 + `llama-3.3-70b-versatile` | — |
-| 硅基流动 | `https://api.siliconflow.cn/v1` + `FunAudioLLM/SenseVoiceSmall` | 同左 + `Qwen/Qwen2.5-7B-Instruct` | 同左 + `FunAudioLLM/CosyVoice2-0.5B` |
-| 自建 faster-whisper | `http://<主机>:8000/v1` + `Systran/faster-whisper-large-v3` | — | — |
+| SiliconFlow (default) | `https://api.siliconflow.cn/v1` + `FunAudioLLM/SenseVoiceSmall` | same + `Qwen/Qwen2.5-7B-Instruct` | same + `FunAudioLLM/CosyVoice2-0.5B` |
+| OpenAI | `https://api.openai.com/v1` + `whisper-1` | same + `gpt-4o-mini` | same + `tts-1` |
+| Groq (very fast STT) | `https://api.groq.com/openai/v1` + `whisper-large-v3-turbo` | same + `llama-3.3-70b-versatile` | — |
+| Self-hosted faster-whisper | `http://<host>:8000/v1` + `Systran/faster-whisper-large-v3` | — | — |
 
-> 三个环节可以用不同厂商：例如 Groq 做识别（快）、DeepSeek 做翻译（便宜）、OpenAI 做 TTS（音色好）。
+> Mix and match: e.g. Groq for recognition (fast), DeepSeek for translation (cheap), OpenAI for TTS (good voices).
+> For SiliconFlow TTS a bare voice name like `alex` is automatically sent as `FunAudioLLM/CosyVoice2-0.5B:alex`.
 
-## 已知限制
+## Known limitations
 
-- **内录受系统策略约束**：App 可声明 `allowAudioPlaybackCapture=false` 拒绝被捕获（如部分音乐/视频平台、微信语音通话）；DRM 受保护内容一律不可捕获。此时可退回"麦克风 + 外放"模式。
-- 每次启动内录都需要一次系统授权弹窗（Android 14 的 MediaProjection 安全要求）。
-- VAD 为能量阈值法 + 自适应噪声底；嘈杂环境请把"拾音触发阈值"调大，安静环境调小更灵敏；字幕太长可把"最长分段"调小。
-- 翻译按句段进行（非逐词流式），延迟约为"句长 + 两次 API 往返"，选用低延迟模型可显著改善。
-- TTS 请求 `response_format=mp3`，需服务端支持（OpenAI 及主流兼容服务均支持）。
+- **Internal capture is policy-bound**: apps can opt out via `allowAudioPlaybackCapture=false` (some music/video platforms, WeChat calls); DRM-protected content can never be captured. Fall back to microphone + speaker playback in those cases.
+- Every internal-capture session needs one system consent dialog (Android 14 MediaProjection security requirement).
+- The VAD is energy-based with an adaptive noise floor; raise the trigger threshold in noisy environments, lower it in quiet ones. Shorten "max segment" if captions feel too long.
+- Translation is per segment (not word-by-word streaming); latency ≈ segment length + two API round trips. Low-latency models help a lot.
+- TTS requests `response_format=mp3`, supported by OpenAI and most compatible services.
 
-## 项目结构
+## Project structure
 
 ```
 app/src/main/java/com/lingofloat/app/
-├── MainActivity.kt        # Compose 设置页 + 权限/启动流程
-├── CaptionService.kt      # 前台服务，流水线编排
-├── SettingsStore.kt       # 配置模型与持久化
+├── MainActivity.kt        # Compose settings page + permission/start flow
+├── CaptionService.kt      # Foreground service, pipeline orchestration
+├── SettingsStore.kt       # Settings model + persistence (+ legacy migration)
+├── I18n.kt                # English/Chinese string table (English default)
 ├── audio/
-│   ├── AudioCapturer.kt   # 麦克风 / 内部音频采集
-│   ├── VadSegmenter.kt    # 能量 VAD 断句
-│   └── WavUtil.kt         # PCM → WAV
-├── api/ApiClients.kt      # Whisper / Chat / TTS 客户端
-├── overlay/SubtitleOverlay.kt  # 悬浮双语字幕窗
-└── tts/TtsPlayer.kt       # TTS 播放队列
+│   ├── AudioCapturer.kt   # Microphone / internal audio capture
+│   ├── VadSegmenter.kt    # Energy VAD with adaptive noise floor
+│   └── WavUtil.kt         # PCM -> WAV
+├── api/ApiClients.kt      # Whisper / Chat / TTS clients
+├── overlay/SubtitleOverlay.kt  # Floating bilingual caption window
+└── tts/TtsPlayer.kt       # TTS playback queue
 ```
 
 ## License

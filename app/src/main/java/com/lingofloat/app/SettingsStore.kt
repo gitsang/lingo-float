@@ -4,13 +4,14 @@ import android.content.Context
 import org.json.JSONObject
 import java.net.URI
 
-/** 一组 OpenAI 兼容 API 的连接配置 */
+/** Connection settings for one OpenAI-compatible API. */
 data class ApiConfig(
     val baseUrl: String = "",
     val apiKey: String = "",
-    val model: String = ""
+    val model: String = "",
+    val provider: String = PROVIDER_SILICONFLOW
 ) {
-    /** 规范化 base URL：去掉末尾斜杠；若只有域名则自动补 /v1 */
+    /** Normalize base URL: trim trailing slash; append /v1 when only a host is given. */
     fun normalizedBase(): String {
         var b = baseUrl.trim().trimEnd('/')
         if (b.isEmpty()) return b
@@ -26,14 +27,27 @@ data class ApiConfig(
         .put("baseUrl", baseUrl)
         .put("apiKey", apiKey)
         .put("model", model)
+        .put("provider", provider)
 
     companion object {
+        const val PROVIDER_SILICONFLOW = "siliconflow"
+        const val PROVIDER_OPENAI = "openai"
+        const val PROVIDER_COMPATIBLE = "compatible"
+
+        /** Preset base URL for a provider; null keeps the current custom URL. */
+        fun providerBase(provider: String): String? = when (provider) {
+            PROVIDER_SILICONFLOW -> "https://api.siliconflow.cn/v1"
+            PROVIDER_OPENAI -> "https://api.openai.com/v1"
+            else -> null
+        }
+
         fun fromJson(o: JSONObject?, def: ApiConfig): ApiConfig {
             if (o == null) return def
             return ApiConfig(
                 baseUrl = o.optString("baseUrl", def.baseUrl),
                 apiKey = o.optString("apiKey", def.apiKey),
-                model = o.optString("model", def.model)
+                model = o.optString("model", def.model),
+                provider = o.optString("provider", def.provider)
             )
         }
     }
@@ -44,13 +58,27 @@ data class AppSettings(
     val ttsEnabled: Boolean = false,
     val showOriginal: Boolean = true,
     val compactMode: Boolean = false,
+    val originalFontSize: Int = 13,
     val fontSize: Int = 18,
     val targetLang: String = "简体中文",
-    val whisper: ApiConfig = ApiConfig("https://api.openai.com/v1", "", "whisper-1"),
+    val language: String = Strings.EN,
+    val whisper: ApiConfig = ApiConfig(
+        baseUrl = "https://api.siliconflow.cn/v1",
+        model = "FunAudioLLM/SenseVoiceSmall",
+        provider = ApiConfig.PROVIDER_SILICONFLOW
+    ),
     val whisperLang: String = "",
-    val translate: ApiConfig = ApiConfig("https://api.openai.com/v1", "", "gpt-4o-mini"),
-    val tts: ApiConfig = ApiConfig("https://api.openai.com/v1", "", "tts-1"),
-    val ttsVoice: String = "alloy",
+    val translate: ApiConfig = ApiConfig(
+        baseUrl = "https://api.siliconflow.cn/v1",
+        model = "Qwen/Qwen2.5-7B-Instruct",
+        provider = ApiConfig.PROVIDER_SILICONFLOW
+    ),
+    val tts: ApiConfig = ApiConfig(
+        baseUrl = "https://api.siliconflow.cn/v1",
+        model = "FunAudioLLM/CosyVoice2-0.5B",
+        provider = ApiConfig.PROVIDER_SILICONFLOW
+    ),
+    val ttsVoice: String = "alex",
     val ttsSpeed: Float = 1.0f,
     val vadThreshold: Int = 300,
     val requestTimeoutSec: Int = 30,
@@ -62,7 +90,7 @@ data class AppSettings(
     }
 }
 
-/** SharedPreferences + JSON 持久化 */
+/** Persistence via SharedPreferences + JSON. */
 class SettingsStore(context: Context) {
     private val prefs = context.getSharedPreferences("lingofloat_settings", Context.MODE_PRIVATE)
 
@@ -71,13 +99,16 @@ class SettingsStore(context: Context) {
         return runCatching {
             val o = JSONObject(raw)
             val def = AppSettings()
-            AppSettings(
+            val legacy = !o.has("language")
+            var settings = AppSettings(
                 source = o.optString("source", def.source),
                 ttsEnabled = o.optBoolean("ttsEnabled", def.ttsEnabled),
                 showOriginal = o.optBoolean("showOriginal", def.showOriginal),
                 compactMode = o.optBoolean("compactMode", def.compactMode),
+                originalFontSize = o.optInt("originalFontSize", def.originalFontSize),
                 fontSize = o.optInt("fontSize", def.fontSize),
                 targetLang = o.optString("targetLang", def.targetLang),
+                language = o.optString("language", def.language),
                 whisper = ApiConfig.fromJson(o.optJSONObject("whisper"), def.whisper),
                 whisperLang = o.optString("whisperLang", def.whisperLang),
                 translate = ApiConfig.fromJson(o.optJSONObject("translate"), def.translate),
@@ -88,7 +119,24 @@ class SettingsStore(context: Context) {
                 requestTimeoutSec = o.optInt("requestTimeoutSec", def.requestTimeoutSec),
                 maxSegmentSec = o.optInt("maxSegmentSec", def.maxSegmentSec)
             )
+            if (legacy) {
+                // One-time migration: old OpenAI defaults -> new SiliconFlow defaults.
+                // Custom endpoints/models and API keys are preserved.
+                settings = settings.copy(
+                    whisper = migrateApi(settings.whisper, "whisper-1", def.whisper),
+                    translate = migrateApi(settings.translate, "gpt-4o-mini", def.translate),
+                    tts = migrateApi(settings.tts, "tts-1", def.tts),
+                    ttsVoice = if (settings.ttsVoice == "alloy") def.ttsVoice else settings.ttsVoice
+                )
+                save(settings)
+            }
+            settings
         }.getOrDefault(AppSettings())
+    }
+
+    private fun migrateApi(cfg: ApiConfig, oldModel: String, def: ApiConfig): ApiConfig {
+        val wasDefault = cfg.baseUrl.trimEnd('/') == "https://api.openai.com/v1" && cfg.model == oldModel
+        return if (wasDefault) def.copy(apiKey = cfg.apiKey) else cfg
     }
 
     fun save(s: AppSettings) {
@@ -97,8 +145,10 @@ class SettingsStore(context: Context) {
             .put("ttsEnabled", s.ttsEnabled)
             .put("showOriginal", s.showOriginal)
             .put("compactMode", s.compactMode)
+            .put("originalFontSize", s.originalFontSize)
             .put("fontSize", s.fontSize)
             .put("targetLang", s.targetLang)
+            .put("language", s.language)
             .put("whisper", s.whisper.toJson())
             .put("whisperLang", s.whisperLang)
             .put("translate", s.translate.toJson())

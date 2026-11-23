@@ -10,8 +10,9 @@ import java.util.concurrent.LinkedBlockingQueue
 import java.util.concurrent.TimeUnit
 
 /**
- * TTS 顺序播放队列：后台线程逐条播放 mp3。
- * 队列积压超过 2 条时丢弃最旧的，保证"实时"不被越拖越远。
+ * Sequential TTS playback queue: a background thread plays mp3 clips one by one.
+ * When more than 2 clips are backlogged the oldest are dropped so "real-time"
+ * playback never falls further and further behind.
  */
 class TtsPlayer(private val context: Context) {
     private val queue = LinkedBlockingQueue<ByteArray>()
@@ -26,7 +27,7 @@ class TtsPlayer(private val context: Context) {
                 break
             }
             if (!running) break
-            runCatching { play(data) }.onFailure { Log.w(TAG, "播放失败", it) }
+            runCatching { play(data) }.onFailure { Log.w(TAG, "Playback failed", it) }
         }
     }, "tts-player").apply { isDaemon = true; start() }
 

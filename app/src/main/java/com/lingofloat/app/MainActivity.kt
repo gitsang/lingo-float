@@ -28,6 +28,7 @@ import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
+import androidx.compose.material3.FilterChip
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
@@ -60,7 +61,7 @@ class MainActivity : ComponentActivity() {
     private val recordPermLauncher =
         registerForActivityResult(ActivityResultContracts.RequestPermission()) { granted ->
             if (granted) continueStart()
-            else toast("需要录音权限才能采集音频")
+            else toast(tr().toastRecordPerm)
         }
 
     private val notifPermLauncher =
@@ -69,9 +70,9 @@ class MainActivity : ComponentActivity() {
     private val projectionLauncher =
         registerForActivityResult(ActivityResultContracts.StartActivityForResult()) { result ->
             if (result.resultCode == Activity.RESULT_OK && result.data != null) {
-                startService(result.resultCode, result.data!!)
+                startCaptionService(result.resultCode, result.data!!)
             } else {
-                toast("未授权屏幕/音频捕获")
+                toast(tr().toastProjectionDenied)
             }
         }
 
@@ -87,10 +88,13 @@ class MainActivity : ComponentActivity() {
         }
     }
 
+    private fun tr(): Strings = Strings.of(store.load().language)
+
     @Composable
     private fun SettingsScreen() {
         var s by remember { mutableStateOf(store.load()) }
         var running by remember { mutableStateOf(CaptionService.isRunning) }
+        val t = remember(s.language) { Strings.of(s.language) }
 
         LaunchedEffect(Unit) {
             while (true) {
@@ -107,136 +111,152 @@ class MainActivity : ComponentActivity() {
             verticalArrangement = Arrangement.spacedBy(12.dp)
         ) {
             Text("LingoFloat", fontSize = 26.sp, fontWeight = FontWeight.Bold)
-            Text("实时双语字幕 · 悬浮窗翻译", fontSize = 13.sp, color = Color.Gray)
+            Text(
+                if (s.language == Strings.ZH) "实时双语字幕 · 悬浮窗翻译"
+                else "Real-time bilingual captions in a floating window",
+                fontSize = 13.sp, color = Color.Gray
+            )
 
-            // ---- 运行控制 ----
-            Card(colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant)) {
-                Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                    Text(
-                        if (running) "● 运行中" else "○ 未运行",
-                        color = if (running) Color(0xFF2E7D32) else Color.Gray,
-                        fontWeight = FontWeight.Bold
-                    )
-                    Row(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
-                        Button(
-                            onClick = {
-                                store.save(s)
-                                beginStart(s)
-                            },
-                            enabled = !running,
-                            modifier = Modifier.weight(1f)
-                        ) { Text("开始") }
-                        OutlinedButton(
-                            onClick = {
-                                ContextCompat.startForegroundService(
-                                    this@MainActivity,
-                                    Intent(this@MainActivity, CaptionService::class.java)
-                                        .setAction(CaptionService.ACTION_STOP)
-                                )
-                            },
-                            enabled = running,
-                            modifier = Modifier.weight(1f),
-                            colors = ButtonDefaults.outlinedButtonColors(contentColor = Color(0xFFC62828))
-                        ) { Text("停止") }
-                    }
-                    Text(
-                        "启动前会自动保存配置。内部音频模式需要授权一次系统录屏弹窗。",
-                        fontSize = 11.sp, color = Color.Gray
-                    )
+            // ---- Status ----
+            SectionCard(t.status) {
+                Text(
+                    (if (running) "● " else "○ ") + (if (running) t.running else t.stopped),
+                    color = if (running) Color(0xFF2E7D32) else Color.Gray,
+                    fontWeight = FontWeight.Bold
+                )
+                Row(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
+                    Button(
+                        onClick = {
+                            store.save(s)
+                            beginStart(s)
+                        },
+                        enabled = !running,
+                        modifier = Modifier.weight(1f)
+                    ) { Text(t.start) }
+                    OutlinedButton(
+                        onClick = {
+                            ContextCompat.startForegroundService(
+                                this@MainActivity,
+                                Intent(this@MainActivity, CaptionService::class.java)
+                                    .setAction(CaptionService.ACTION_STOP)
+                            )
+                        },
+                        enabled = running,
+                        modifier = Modifier.weight(1f),
+                        colors = ButtonDefaults.outlinedButtonColors(contentColor = Color(0xFFC62828))
+                    ) { Text(t.stop) }
                 }
+                OutlinedTextField(
+                    value = s.targetLang,
+                    onValueChange = { s = s.copy(targetLang = it) },
+                    label = { Text(t.targetLanguage) },
+                    singleLine = true,
+                    modifier = Modifier.fillMaxWidth()
+                )
+                SwitchRow(t.speakTranslation, s.ttsEnabled) { s = s.copy(ttsEnabled = it) }
+                Text(t.statusHint, fontSize = 11.sp, color = Color.Gray)
             }
 
-            // ---- 音源与开关 ----
-            SectionCard("音频来源") {
+            // ---- Audio ----
+            SectionCard(t.audio) {
+                Text(t.audioSource, fontSize = 13.sp)
                 Row(verticalAlignment = Alignment.CenterVertically) {
                     RadioButton(
                         selected = s.source == AppSettings.SOURCE_MIC,
                         onClick = { s = s.copy(source = AppSettings.SOURCE_MIC) }
                     )
-                    Text("麦克风（环境声 / 外放）")
+                    Text(t.microphone)
                 }
                 Row(verticalAlignment = Alignment.CenterVertically) {
                     RadioButton(
                         selected = s.source == AppSettings.SOURCE_INTERNAL,
                         onClick = { s = s.copy(source = AppSettings.SOURCE_INTERNAL) }
                     )
-                    Text("手机内部音频（视频 / 播客）")
+                    Text(t.internalAudio)
                 }
-                Text(
-                    "内录仅支持允许被捕获的 App；微信语音、DRM 内容等无法捕获。",
-                    fontSize = 11.sp, color = Color.Gray
-                )
-                SwitchRow("朗读译文（TTS）", s.ttsEnabled) { s = s.copy(ttsEnabled = it) }
-                SwitchRow("字幕显示原文", s.showOriginal) { s = s.copy(showOriginal = it) }
-                SwitchRow("紧凑模式（悬浮窗仅两行）", s.compactMode) { s = s.copy(compactMode = it) }
-                Text(
-                    "紧凑模式：原文/译文各一行，超出自动横向滚动，隐藏标题栏，长按恢复标准模式。任意模式下按住悬浮窗任意位置均可拖动，按钮点击不受影响。",
-                    fontSize = 11.sp, color = Color.Gray
-                )
-                OutlinedTextField(
-                    value = s.targetLang,
-                    onValueChange = { s = s.copy(targetLang = it) },
-                    label = { Text("目标语言") },
-                    singleLine = true,
-                    modifier = Modifier.fillMaxWidth()
-                )
-                Text("译文字号：${s.fontSize}sp", fontSize = 13.sp)
-                Slider(
-                    value = s.fontSize.toFloat(),
-                    onValueChange = { s = s.copy(fontSize = it.toInt()) },
-                    valueRange = 12f..32f,
-                    steps = 19
-                )
-                Text("拾音触发阈值：${s.vadThreshold}（越小越灵敏，嘈杂环境调大）", fontSize = 13.sp)
+                Text(t.internalHint, fontSize = 11.sp, color = Color.Gray)
+                Text(String.format(t.triggerThresholdFmt, s.vadThreshold), fontSize = 13.sp)
                 Slider(
                     value = s.vadThreshold.toFloat(),
                     onValueChange = { s = s.copy(vadThreshold = it.toInt()) },
                     valueRange = 100f..1200f
                 )
-                Text("最长分段：${s.maxSegmentSec}s（连续说话强制断句，越小字幕越碎）", fontSize = 13.sp)
+                Text(String.format(t.maxSegmentFmt, s.maxSegmentSec), fontSize = 13.sp)
                 Slider(
                     value = s.maxSegmentSec.toFloat(),
                     onValueChange = { s = s.copy(maxSegmentSec = it.toInt()) },
                     valueRange = 3f..15f,
                     steps = 11
                 )
-                Text("请求超时：${s.requestTimeoutSec}s（单个 API 请求总时长上限，超时自动跳过）", fontSize = 13.sp)
-                Slider(
-                    value = s.requestTimeoutSec.toFloat(),
-                    onValueChange = { s = s.copy(requestTimeoutSec = it.toInt()) },
-                    valueRange = 10f..120f,
-                    steps = 10
-                )
             }
 
-            // ---- Whisper ----
-            SectionCard("语音识别 · Whisper API") {
-                ApiFields(s.whisper, "whisper-1") { s = s.copy(whisper = it) }
+            // ---- Overlay ----
+            SectionCard(t.overlay) {
+                SwitchRow(t.compactMode, s.compactMode) { s = s.copy(compactMode = it) }
+                SwitchRow(t.showOriginal, s.showOriginal) { s = s.copy(showOriginal = it) }
+                Text(String.format(t.originalFontSizeFmt, s.originalFontSize), fontSize = 13.sp)
+                Slider(
+                    value = s.originalFontSize.toFloat(),
+                    onValueChange = { s = s.copy(originalFontSize = it.toInt()) },
+                    valueRange = 10f..24f,
+                    steps = 13
+                )
+                Text(String.format(t.translationFontSizeFmt, s.fontSize), fontSize = 13.sp)
+                Slider(
+                    value = s.fontSize.toFloat(),
+                    onValueChange = { s = s.copy(fontSize = it.toInt()) },
+                    valueRange = 12f..32f,
+                    steps = 19
+                )
+                Text(t.overlayHint, fontSize = 11.sp, color = Color.Gray)
+            }
+
+            // ---- Speech recognition ----
+            SectionCard(t.speechRecognition) {
+                ProviderRow(s.whisper.provider, t) { p ->
+                    s = s.copy(whisper = s.whisper.copy(
+                        provider = p,
+                        baseUrl = ApiConfig.providerBase(p) ?: s.whisper.baseUrl
+                    ))
+                }
+                ApiFields(s.whisper, "FunAudioLLM/SenseVoiceSmall", t) { s = s.copy(whisper = it) }
                 OutlinedTextField(
                     value = s.whisperLang,
                     onValueChange = { s = s.copy(whisperLang = it) },
-                    label = { Text("源语言（可选，如 en / ja，留空自动检测）") },
+                    label = { Text(t.sourceLanguage) },
                     singleLine = true,
                     modifier = Modifier.fillMaxWidth()
                 )
             }
 
-            // ---- 翻译 ----
-            SectionCard("翻译 · Chat Completions API") {
-                ApiFields(s.translate, "gpt-4o-mini") { s = s.copy(translate = it) }
+            // ---- Translation ----
+            SectionCard(t.translation) {
+                ProviderRow(s.translate.provider, t) { p ->
+                    s = s.copy(translate = s.translate.copy(
+                        provider = p,
+                        baseUrl = ApiConfig.providerBase(p) ?: s.translate.baseUrl
+                    ))
+                }
+                ApiFields(s.translate, "Qwen/Qwen2.5-7B-Instruct", t) { s = s.copy(translate = it) }
             }
 
-            // ---- TTS ----
-            SectionCard("语音合成 · TTS API") {
-                ApiFields(s.tts, "tts-1") { s = s.copy(tts = it) }
+            // ---- Speech synthesis ----
+            SectionCard(t.speechSynthesis) {
+                ProviderRow(s.tts.provider, t) { p ->
+                    s = s.copy(tts = s.tts.copy(
+                        provider = p,
+                        baseUrl = ApiConfig.providerBase(p) ?: s.tts.baseUrl
+                    ))
+                }
+                ApiFields(s.tts, "FunAudioLLM/CosyVoice2-0.5B", t) { s = s.copy(tts = it) }
                 OutlinedTextField(
                     value = s.ttsVoice,
                     onValueChange = { s = s.copy(ttsVoice = it) },
-                    label = { Text("音色 voice（如 alloy / echo / nova）") },
+                    label = { Text(t.voice) },
                     singleLine = true,
                     modifier = Modifier.fillMaxWidth()
                 )
-                Text("语速：${"%.1f".format(s.ttsSpeed)}x", fontSize = 13.sp)
+                Text(String.format(t.speedFmt, s.ttsSpeed), fontSize = 13.sp)
                 Slider(
                     value = s.ttsSpeed,
                     onValueChange = { s = s.copy(ttsSpeed = it) },
@@ -244,19 +264,35 @@ class MainActivity : ComponentActivity() {
                 )
             }
 
-            Button(
-                onClick = {
-                    store.save(s)
-                    toast("配置已保存")
-                },
-                modifier = Modifier.fillMaxWidth()
-            ) { Text("保存配置") }
+            // ---- Settings ----
+            SectionCard(t.settings) {
+                Text(t.language, fontSize = 13.sp)
+                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    FilterChip(
+                        selected = s.language == Strings.EN,
+                        onClick = { s = s.copy(language = Strings.EN) },
+                        label = { Text("English") }
+                    )
+                    FilterChip(
+                        selected = s.language == Strings.ZH,
+                        onClick = { s = s.copy(language = Strings.ZH) },
+                        label = { Text("中文") }
+                    )
+                }
+                Button(
+                    onClick = {
+                        store.save(s)
+                        toast(t.saved)
+                    },
+                    modifier = Modifier.fillMaxWidth()
+                ) { Text(t.save) }
+                Text(
+                    if (s.language == Strings.ZH) "API 密钥仅保存在本机，不经过任何第三方。"
+                    else "API keys are stored on this device only and never sent to third parties.",
+                    fontSize = 11.sp, color = Color.Gray
+                )
+            }
 
-            Text(
-                "API 地址填到 /v1 即可（如 https://api.openai.com/v1），" +
-                "兼容 OpenAI 协议的第三方 / 自建服务均可。密钥仅保存在本机。",
-                fontSize = 11.sp, color = Color.Gray
-            )
             Spacer(Modifier.height(24.dp))
         }
     }
@@ -284,19 +320,41 @@ class MainActivity : ComponentActivity() {
     }
 
     @Composable
-    private fun ApiFields(cfg: ApiConfig, modelHint: String, onChange: (ApiConfig) -> Unit) {
+    private fun ProviderRow(selected: String, t: Strings, onSelect: (String) -> Unit) {
+        Text(t.provider, fontSize = 13.sp)
+        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+            FilterChip(
+                selected = selected == ApiConfig.PROVIDER_SILICONFLOW,
+                onClick = { onSelect(ApiConfig.PROVIDER_SILICONFLOW) },
+                label = { Text("SiliconFlow") }
+            )
+            FilterChip(
+                selected = selected == ApiConfig.PROVIDER_OPENAI,
+                onClick = { onSelect(ApiConfig.PROVIDER_OPENAI) },
+                label = { Text("OpenAI") }
+            )
+            FilterChip(
+                selected = selected == ApiConfig.PROVIDER_COMPATIBLE,
+                onClick = { onSelect(ApiConfig.PROVIDER_COMPATIBLE) },
+                label = { Text(t.providerCompatible) }
+            )
+        }
+    }
+
+    @Composable
+    private fun ApiFields(cfg: ApiConfig, modelHint: String, t: Strings, onChange: (ApiConfig) -> Unit) {
         OutlinedTextField(
             value = cfg.baseUrl,
             onValueChange = { onChange(cfg.copy(baseUrl = it)) },
-            label = { Text("API 地址（Base URL）") },
-            placeholder = { Text("https://api.openai.com/v1") },
+            label = { Text(t.baseUrl) },
+            placeholder = { Text("https://api.siliconflow.cn/v1") },
             singleLine = true,
             modifier = Modifier.fillMaxWidth()
         )
         OutlinedTextField(
             value = cfg.apiKey,
             onValueChange = { onChange(cfg.copy(apiKey = it)) },
-            label = { Text("API Key") },
+            label = { Text(t.apiKey) },
             singleLine = true,
             visualTransformation = PasswordVisualTransformation(),
             modifier = Modifier.fillMaxWidth()
@@ -304,26 +362,27 @@ class MainActivity : ComponentActivity() {
         OutlinedTextField(
             value = cfg.model,
             onValueChange = { onChange(cfg.copy(model = it)) },
-            label = { Text("模型") },
+            label = { Text(t.model) },
             placeholder = { Text(modelHint) },
             singleLine = true,
             modifier = Modifier.fillMaxWidth()
         )
     }
 
-    // ---- 启动流程：悬浮窗 → 录音 → 通知 → (内录) MediaProjection ----
+    // ---- Start flow: overlay -> record -> notification -> (internal) MediaProjection ----
 
     private fun beginStart(s: AppSettings) {
+        val t = Strings.of(s.language)
         if (!s.whisper.isConfigured || !s.translate.isConfigured) {
-            toast("请先填写 Whisper 与翻译 API 的地址和模型")
+            toast(t.toastFillApis)
             return
         }
         if (s.ttsEnabled && !s.tts.isConfigured) {
-            toast("已开启 TTS，请填写 TTS API 配置")
+            toast(t.toastFillTts)
             return
         }
         if (!Settings.canDrawOverlays(this)) {
-            toast("请授予悬浮窗权限后再次点击开始")
+            toast(t.toastOverlayPerm)
             startActivity(
                 Intent(
                     Settings.ACTION_MANAGE_OVERLAY_PERMISSION,
@@ -353,11 +412,11 @@ class MainActivity : ComponentActivity() {
             val mpm = getSystemService(Context.MEDIA_PROJECTION_SERVICE) as MediaProjectionManager
             projectionLauncher.launch(mpm.createScreenCaptureIntent())
         } else {
-            startService(0, null)
+            startCaptionService(0, null)
         }
     }
 
-    private fun startService(resultCode: Int, resultData: Intent?) {
+    private fun startCaptionService(resultCode: Int, resultData: Intent?) {
         val s = store.load()
         val intent = Intent(this, CaptionService::class.java).apply {
             putExtra(CaptionService.EXTRA_SOURCE, s.source)
@@ -365,7 +424,7 @@ class MainActivity : ComponentActivity() {
             if (resultData != null) putExtra(CaptionService.EXTRA_RESULT_DATA, resultData)
         }
         ContextCompat.startForegroundService(this, intent)
-        toast("已启动，字幕将显示在悬浮窗中")
+        toast(Strings.of(s.language).toastStarted)
     }
 
     private fun toast(msg: String) {

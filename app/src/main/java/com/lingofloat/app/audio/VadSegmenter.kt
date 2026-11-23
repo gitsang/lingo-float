@@ -4,11 +4,13 @@ import java.io.ByteArrayOutputStream
 import kotlin.math.sqrt
 
 /**
- * 轻量能量 VAD：按 20ms 帧计算 RMS，
- * 语音开始（带 pre-roll 防截头）→ 尾部静音 600ms 或达到最长分段时切出一段。
- * 触发阈值 = max(固定阈值, 噪声底 × 2)：噪声底在非语音帧慢速 EMA 跟踪，
- * 背景音乐/环境声抬高触发线，说话一停即判静音，避免连续音频不断句。
- * 非线程安全，仅在采集线程内使用。
+ * Lightweight energy VAD: RMS per 20ms frame.
+ * Speech start (with pre-roll to avoid clipping) -> cut a segment after 600ms
+ * of trailing silence or when the max segment length is reached.
+ * Trigger level = max(fixed threshold, noise floor x 2): the noise floor is a
+ * slow EMA over non-speech frames, so background music raises the trigger line
+ * and a pause in speech is detected as silence immediately.
+ * Not thread-safe; use only inside the capture thread.
  */
 class VadSegmenter(
     private val threshold: Int = 300,
@@ -28,7 +30,7 @@ class VadSegmenter(
     private var totalMs = 0
     private var noiseFloor = 0.0
 
-    /** 输入原始 PCM，返回本次凑齐的完整语音段（可能为多个） */
+    /** Feed raw PCM; returns complete speech segments produced by this call. */
     fun accept(data: ByteArray, len: Int): List<ByteArray> {
         if (len <= 0) return emptyList()
         val out = mutableListOf<ByteArray>()
@@ -43,7 +45,7 @@ class VadSegmenter(
         return out
     }
 
-    /** 停止时冲刷未闭合的语音段 */
+    /** Flush an unfinished segment when stopping. */
     fun flush(): ByteArray? {
         val seg = if (inSpeech && speechMs >= minSpeechMs) buffer.toByteArray() else null
         reset()
