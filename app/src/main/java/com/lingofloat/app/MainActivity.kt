@@ -185,13 +185,6 @@ class MainActivity : ComponentActivity() {
                     onValueChange = { s = s.copy(vadThreshold = it.toInt()) },
                     valueRange = 100f..1200f
                 )
-                Text(String.format(t.maxSegmentFmt, s.maxSegmentSec), fontSize = 13.sp)
-                Slider(
-                    value = s.maxSegmentSec.toFloat(),
-                    onValueChange = { s = s.copy(maxSegmentSec = it.toInt()) },
-                    valueRange = 3f..15f,
-                    steps = 11
-                )
             }
 
             // ---- Overlay ----

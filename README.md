@@ -22,7 +22,8 @@ Recognition, translation and speech synthesis all go through **OpenAI-compatible
 
 - 🏭 **Provider presets**: SiliconFlow (default), OpenAI, or any OpenAI-compatible endpoint — picking a provider fills the base URL, which stays editable
 - ⏱️ **Request timeout protection**: hard cap on total request time (default 30s); a stuck request is skipped without blocking the pipeline
-- ✂️ **Adaptive segmentation**: the VAD noise floor tracks background audio, so a pause in speech ends the segment immediately; max segment length defaults to 8s (3–15s adjustable)
+- ✂️ **Sentence-level segmentation**: while you speak, the accumulated audio is probed with the STT API every ~1.5s; as soon as a complete sentence (。！？!?… etc.) appears it is sent to translation — no fixed-length chopping (60s safety valve only). The VAD noise floor tracks background audio so pauses end utterances cleanly
+- ⏳ **Readable pacing**: each (original, translation) pair is displayed together and held for at least 2 seconds before the next pair appears
 - 🌍 **i18n**: English (default) and Chinese, switchable in Settings; any target language can be typed in (简体中文 / English / 日本語…)
 - 🔒 API keys are stored on-device only and never sent to third parties
 
@@ -31,18 +32,24 @@ Recognition, translation and speech synthesis all go through **OpenAI-compatible
 ```
 Microphone / internal audio (16kHz PCM)
         |
-   Energy VAD segmentation (600ms silence cuts, max 8s, 240ms pre-roll,
-   adaptive noise floor for background music)
+   Energy VAD (adaptive noise floor, 240ms pre-roll,
+   600ms silence closes an utterance)
         |
-   Whisper-style API --> original text --> overlay line 1
+   every ~1.5s: probe STT with the audio so far
         |
-   Chat Completions  --> translation --> overlay line 2
+   complete sentence detected (。！？!?…) --> translation queue
+   (utterance end flushes the remaining tail)
+        |
+   Chat Completions --> (original, translation) pair
+        |
+   display queue: each pair shown together, held >= 2s
         |
    TTS API (optional) --> mp3 queue, sequential playback
 ```
 
 - Foreground service (`mediaProjection` / `microphone` type) with a one-tap Stop action in the notification
-- Recognition + translation run serially in one coroutine so captions never arrive out of order
+- Probes are skipped while a previous probe is still in flight, so a slow STT API never builds a backlog
+- Sentence emission checks prefix stability between probes (Whisper can revise earlier text); the utterance-end pass always flushes what is left
 
 ## Build
 
@@ -76,7 +83,7 @@ Mirrors for China are preconfigured (Aliyun Maven, Tencent Gradle distribution).
 | Section | Contents |
 |---|---|
 | Status | Running state + Start/Stop, target language, speak translation (TTS) |
-| Audio | Audio source, trigger threshold, max segment length |
+| Audio | Audio source, trigger threshold |
 | Overlay | Compact mode, show original, original font size, translation font size |
 | Speech recognition | Provider, base URL, API key, model, source language |
 | Translation | Provider, base URL, API key, model |
@@ -101,8 +108,10 @@ Base URLs are filled up to `/v1` (a bare host gets `/v1` appended automatically)
 
 - **Internal capture is policy-bound**: apps can opt out via `allowAudioPlaybackCapture=false` (some music/video platforms, WeChat calls); DRM-protected content can never be captured. Fall back to microphone + speaker playback in those cases.
 - Every internal-capture session needs one system consent dialog (Android 14 MediaProjection security requirement).
-- The VAD is energy-based with an adaptive noise floor; raise the trigger threshold in noisy environments, lower it in quiet ones. Shorten "max segment" if captions feel too long.
-- Translation is per segment (not word-by-word streaming); latency ≈ segment length + two API round trips. Low-latency models help a lot.
+- The VAD is energy-based with an adaptive noise floor; raise the trigger threshold in noisy environments, lower it in quiet ones.
+- Sentence detection relies on the STT model emitting punctuation; models that rarely punctuate will fall back to utterance-level (silence-based) captions.
+- Probing re-transcribes the growing utterance every ~1.5s, so STT usage is higher than one-shot segmentation — fast/cheap models (SenseVoice, whisper-turbo) are recommended.
+- Display pacing adds up to 2s of intentional hold per sentence; during fast speech the display queue may lag behind the audio.
 - TTS requests `response_format=mp3`, supported by OpenAI and most compatible services.
 
 ## Project structure
@@ -112,6 +121,7 @@ app/src/main/java/com/lingofloat/app/
 ├── MainActivity.kt        # Compose settings page + permission/start flow
 ├── CaptionService.kt      # Foreground service, pipeline orchestration
 ├── SettingsStore.kt       # Settings model + persistence (+ legacy migration)
+├── SentenceSplitter.kt    # Punctuation-based sentence extraction
 ├── I18n.kt                # English/Chinese string table (English default)
 ├── audio/
 │   ├── AudioCapturer.kt   # Microphone / internal audio capture

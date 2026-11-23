@@ -5,8 +5,10 @@ import kotlin.math.sqrt
 
 /**
  * Lightweight energy VAD: RMS per 20ms frame.
- * Speech start (with pre-roll to avoid clipping) -> cut a segment after 600ms
- * of trailing silence or when the max segment length is reached.
+ * Speech start (with pre-roll to avoid clipping) -> an utterance ends after
+ * 600ms of trailing silence. maxSegmentMs is only a safety valve for extremely
+ * long monologues (default 60s); sentence-level cutting is done downstream by
+ * incremental transcription probes, not by this class.
  * Trigger level = max(fixed threshold, noise floor x 2): the noise floor is a
  * slow EMA over non-speech frames, so background music raises the trigger line
  * and a pause in speech is detected as silence immediately.
@@ -16,7 +18,7 @@ class VadSegmenter(
     private val threshold: Int = 300,
     private val silenceTailMs: Int = 600,
     private val minSpeechMs: Int = 400,
-    private val maxSegmentMs: Int = 15000,
+    private val maxSegmentMs: Int = 60000,
     private val preRollMs: Int = 240
 ) {
     private val frameBytes = 640 // 20ms @ 16kHz mono PCM16
@@ -51,6 +53,16 @@ class VadSegmenter(
         reset()
         return seg
     }
+
+    /** Whether an utterance is currently in progress. */
+    fun isInSpeech(): Boolean = inSpeech
+
+    /** Current utterance length in ms (including pre-roll). */
+    fun currentTotalMs(): Int = totalMs
+
+    /** Snapshot of the in-progress utterance audio, for incremental STT probes. */
+    fun snapshot(): ByteArray? =
+        if (inSpeech && buffer.size() > 0) buffer.toByteArray() else null
 
     private fun processFrame(frame: ByteArray): ByteArray? {
         val level = rms(frame)

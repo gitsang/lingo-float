@@ -32,7 +32,6 @@ class Strings(private val zh: Boolean) {
         "内录仅支持允许被捕获的 App；微信语音、DRM 内容无法捕获。"
     )
     val triggerThresholdFmt get() = s("Trigger threshold: %d (lower = more sensitive)", "拾音触发阈值：%d（越小越灵敏）")
-    val maxSegmentFmt get() = s("Max segment: %ds (force-split continuous speech)", "最长分段：%d 秒（连续说话强制断句）")
 
     // ---- Overlay ----
     val overlay get() = s("Overlay", "悬浮窗")

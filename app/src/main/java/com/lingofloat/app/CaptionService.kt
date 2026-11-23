@@ -13,6 +13,7 @@ import android.os.Handler
 import android.os.IBinder
 import android.os.Looper
 import android.os.PowerManager
+import android.os.SystemClock
 import android.util.Log
 import androidx.core.content.IntentCompat
 import androidx.core.app.NotificationCompat
@@ -31,12 +32,23 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.cancel
 import kotlinx.coroutines.channels.Channel
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
+import java.util.concurrent.atomic.AtomicBoolean
 
 /**
- * Core foreground service: capture -> VAD segmentation -> Whisper -> translate
- * -> overlay captions / TTS. Recognition and translation run serially in a
- * single consumer coroutine so captions stay in order.
+ * Core foreground service.
+ *
+ * Pipeline (sentence-level, no fixed-length chopping):
+ * 1. Capture thread runs the energy VAD. While an utterance is in progress it
+ *    emits a Probe (snapshot of the audio so far) every ~1.5s; when the VAD
+ *    closes an utterance (600ms silence) it emits End.
+ * 2. Processor coroutine transcribes each probe, splits the text into
+ *    sentences and forwards every NEW complete sentence to translation.
+ *    On End, remaining sentences plus the incomplete tail are flushed.
+ * 3. Translated (original, translation) pairs go to a display queue which
+ *    shows each pair for at least MIN_DISPLAY_MS before the next one.
+ * 4. A separate coroutine synthesizes TTS for displayed translations.
  */
 class CaptionService : Service() {
 
@@ -48,10 +60,17 @@ class CaptionService : Service() {
         private const val NOTIF_ID = 1001
         private const val CHANNEL_ID = "lingofloat_caption"
         private const val TAG = "CaptionService"
+        private const val PROBE_INTERVAL_MS = 1500
+        private const val MIN_DISPLAY_MS = 2000L
 
         @Volatile
         var isRunning = false
             private set
+    }
+
+    private sealed class CaptureEvent {
+        class Probe(val utteranceId: Int, val pcm: ByteArray) : CaptureEvent()
+        class End(val utteranceId: Int, val pcm: ByteArray) : CaptureEvent()
     }
 
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
@@ -61,7 +80,9 @@ class CaptionService : Service() {
     private var overlay: SubtitleOverlay? = null
     private var ttsPlayer: TtsPlayer? = null
     private var wakeLock: PowerManager.WakeLock? = null
-    private var segmentChannel: Channel<ByteArray>? = null
+    private var eventChannel: Channel<CaptureEvent>? = null
+    private var displayChannel: Channel<Pair<String, String>>? = null
+    private var ttsChannel: Channel<String>? = null
 
     @Volatile
     private var stopping = false
@@ -150,57 +171,159 @@ class CaptionService : Service() {
         val ttsClient = ttsPlayer?.let {
             TtsClient(settings.tts, settings.ttsVoice, settings.ttsSpeed, settings.requestTimeoutSec)
         }
-        val segmenter = VadSegmenter(
-            threshold = settings.vadThreshold,
-            maxSegmentMs = settings.maxSegmentSec * 1000
-        )
-        val channel = Channel<ByteArray>(Channel.UNLIMITED)
-        segmentChannel = channel
+        val segmenter = VadSegmenter(threshold = settings.vadThreshold)
+        val events = Channel<CaptureEvent>(Channel.UNLIMITED)
+        val display = Channel<Pair<String, String>>(Channel.UNLIMITED)
+        val ttsTexts = Channel<String>(Channel.UNLIMITED)
+        eventChannel = events
+        displayChannel = display
+        ttsChannel = ttsTexts
+        val probeBusy = AtomicBoolean(false)
 
-        // Serial consumer: transcribe -> translate -> captions -> TTS
+        // ---- Processor: probes -> sentence extraction -> translation ----
         scope.launch {
-            for (seg in channel) {
+            var uttId = -1
+            val emitted = ArrayList<String>()
+
+            suspend fun handleText(id: Int, text: String, final: Boolean) {
+                if (id != uttId) {
+                    uttId = id
+                    emitted.clear()
+                }
+                if (text.isNotBlank()) {
+                    val pieces = SentenceSplitter.split(text)
+                    val complete = pieces.filter { SentenceSplitter.isComplete(it) }
+                    // Whisper may revise earlier text between probes; only trust
+                    // the sentence list while the already-emitted prefix matches.
+                    var prefixOk = true
+                    for (i in emitted.indices) {
+                        if (i >= complete.size ||
+                            SentenceSplitter.norm(complete[i]) != SentenceSplitter.norm(emitted[i])
+                        ) {
+                            prefixOk = false
+                            break
+                        }
+                    }
+                    val toEmit = ArrayList<String>()
+                    if (prefixOk || final) {
+                        for (i in emitted.size until complete.size) toEmit.add(complete[i])
+                        if (final) {
+                            val tail = pieces.lastOrNull()
+                            if (tail != null && !SentenceSplitter.isComplete(tail) &&
+                                tail.any { it.isLetterOrDigit() }
+                            ) {
+                                toEmit.add(tail)
+                            }
+                        }
+                    }
+                    for (sentence in toEmit) {
+                        emitted.add(sentence)
+                        try {
+                            overlay?.setStatus(t.translating)
+                            val translated = translator.translate(sentence)
+                            display.trySend(sentence to translated.ifBlank { sentence })
+                        } catch (e: Exception) {
+                            Log.w(TAG, "Translate failed", e)
+                            overlay?.setStatus(String.format(t.errorFmt, (e.message ?: "unknown").take(120)))
+                        }
+                    }
+                }
+                if (final) {
+                    uttId = -1
+                    emitted.clear()
+                }
+            }
+
+            for (ev in events) {
                 if (stopping) break
                 try {
-                    overlay?.setStatus(t.transcribing)
-                    val text = whisper.transcribe(WavUtil.pcmToWav(seg))
-                    if (text.isBlank()) {
-                        overlay?.setStatus(t.listening)
-                        continue
-                    }
-                    overlay?.setOriginal(text)
-                    overlay?.setStatus(t.translating)
-                    val translated = translator.translate(text)
-                    overlay?.setTranslation(translated.ifBlank { text })
-                    overlay?.setStatus(t.listening)
-                    if (ttsClient != null && translated.isNotBlank()) {
-                        try {
-                            ttsPlayer?.enqueue(ttsClient.synthesize(translated))
-                        } catch (e: Exception) {
-                            Log.w(TAG, "TTS failed", e)
+                    when (ev) {
+                        is CaptureEvent.Probe -> {
+                            try {
+                                overlay?.setStatus(t.transcribing)
+                                val text = whisper.transcribe(WavUtil.pcmToWav(ev.pcm))
+                                handleText(ev.utteranceId, text, final = false)
+                            } finally {
+                                probeBusy.set(false)
+                            }
+                        }
+                        is CaptureEvent.End -> {
+                            overlay?.setStatus(t.transcribing)
+                            val text = whisper.transcribe(WavUtil.pcmToWav(ev.pcm))
+                            handleText(ev.utteranceId, text, final = true)
+                            overlay?.setStatus(t.listening)
                         }
                     }
                 } catch (e: Exception) {
+                    probeBusy.set(false)
                     Log.w(TAG, "Pipeline error", e)
                     overlay?.setStatus(String.format(t.errorFmt, (e.message ?: "unknown").take(120)))
                 }
             }
         }
 
+        // ---- Display: each (original, translation) pair shown >= 2s ----
+        scope.launch {
+            var lastShowAt = 0L
+            for ((original, translated) in display) {
+                if (stopping) break
+                val wait = lastShowAt + MIN_DISPLAY_MS - SystemClock.elapsedRealtime()
+                if (wait > 0) delay(wait)
+                overlay?.setOriginal(original)
+                overlay?.setTranslation(translated)
+                lastShowAt = SystemClock.elapsedRealtime()
+                if (ttsClient != null) ttsTexts.trySend(translated)
+            }
+        }
+
+        // ---- TTS: synthesize displayed translations off the display path ----
+        if (ttsClient != null) {
+            scope.launch {
+                for (text in ttsTexts) {
+                    if (stopping) break
+                    try {
+                        ttsPlayer?.enqueue(ttsClient.synthesize(text))
+                    } catch (e: Exception) {
+                        Log.w(TAG, "TTS failed", e)
+                    }
+                }
+            }
+        }
+
+        // ---- Capture thread: VAD + periodic probes ----
         val cap = capturer ?: return
         captureThread = Thread({
             try {
                 cap.start()
                 overlay?.setStatus(t.listening)
                 val buf = ByteArray(3200) // 100ms
+                var utteranceId = 0
+                var lastProbeAtMs = 0
                 while (!stopping) {
                     val n = cap.read(buf)
                     if (n <= 0) {
                         if (stopping) break else continue
                     }
-                    segmenter.accept(buf, n).forEach { channel.trySend(it) }
+                    val segments = segmenter.accept(buf, n)
+                    if (segmenter.isInSpeech() &&
+                        segmenter.currentTotalMs() - lastProbeAtMs >= PROBE_INTERVAL_MS &&
+                        probeBusy.compareAndSet(false, true)
+                    ) {
+                        val snap = segmenter.snapshot()
+                        if (snap != null) {
+                            events.trySend(CaptureEvent.Probe(utteranceId, snap))
+                        } else {
+                            probeBusy.set(false)
+                        }
+                        lastProbeAtMs = segmenter.currentTotalMs()
+                    }
+                    for (seg in segments) {
+                        events.trySend(CaptureEvent.End(utteranceId, seg))
+                        utteranceId++
+                        lastProbeAtMs = 0
+                    }
                 }
-                segmenter.flush()?.let { channel.trySend(it) }
+                segmenter.flush()?.let { events.trySend(CaptureEvent.End(utteranceId, it)) }
             } catch (e: Exception) {
                 Log.e(TAG, "Capture thread error", e)
                 overlay?.setStatus(String.format(t.captureFailedFmt, (e.message ?: "unknown").take(120)))
@@ -218,8 +341,12 @@ class CaptionService : Service() {
         captureThread?.interrupt()
         captureThread = null
 
-        segmentChannel?.close()
-        segmentChannel = null
+        eventChannel?.close()
+        eventChannel = null
+        displayChannel?.close()
+        displayChannel = null
+        ttsChannel?.close()
+        ttsChannel = null
         scope.cancel()
 
         runCatching { projection?.stop() }
