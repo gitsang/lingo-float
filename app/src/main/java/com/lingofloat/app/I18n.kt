@@ -36,7 +36,7 @@ class Strings(private val zh: Boolean) {
 
     // ---- Overlay ----
     val overlay get() = s("Overlay", "悬浮窗")
-    val compactMode get() = s("Compact mode (two lines only)", "紧凑模式（仅两行）")
+    val compactMode get() = s("Compact mode", "紧凑模式")
     val showOriginal get() = s("Show original text", "显示原文")
     val originalFontSizeFmt get() = s("Original font size: %dsp", "原文字号：%dsp")
     val translationFontSizeFmt get() = s("Translation font size: %dsp", "译文字号：%dsp")

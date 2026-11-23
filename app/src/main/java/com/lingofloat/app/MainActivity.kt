@@ -28,9 +28,13 @@ import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
-import androidx.compose.material3.FilterChip
+import androidx.compose.material3.DropdownMenuItem
+import androidx.compose.material3.ExperimentalMaterial3Api
+import androidx.compose.material3.ExposedDropdownMenuBox
+import androidx.compose.material3.ExposedDropdownMenuDefaults
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.MenuAnchorType
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.RadioButton
@@ -266,19 +270,11 @@ class MainActivity : ComponentActivity() {
 
             // ---- Settings ----
             SectionCard(t.settings) {
-                Text(t.language, fontSize = 13.sp)
-                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                    FilterChip(
-                        selected = s.language == Strings.EN,
-                        onClick = { s = s.copy(language = Strings.EN) },
-                        label = { Text("English") }
-                    )
-                    FilterChip(
-                        selected = s.language == Strings.ZH,
-                        onClick = { s = s.copy(language = Strings.ZH) },
-                        label = { Text("中文") }
-                    )
-                }
+                DropdownField(
+                    label = t.language,
+                    options = listOf(Strings.EN to "English", Strings.ZH to "中文"),
+                    selected = s.language
+                ) { s = s.copy(language = it) }
                 Button(
                     onClick = {
                         store.save(s)
@@ -321,23 +317,58 @@ class MainActivity : ComponentActivity() {
 
     @Composable
     private fun ProviderRow(selected: String, t: Strings, onSelect: (String) -> Unit) {
-        Text(t.provider, fontSize = 13.sp)
-        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-            FilterChip(
-                selected = selected == ApiConfig.PROVIDER_SILICONFLOW,
-                onClick = { onSelect(ApiConfig.PROVIDER_SILICONFLOW) },
-                label = { Text("SiliconFlow") }
+        DropdownField(
+            label = t.provider,
+            options = listOf(
+                ApiConfig.PROVIDER_SILICONFLOW to "SiliconFlow",
+                ApiConfig.PROVIDER_OPENAI to "OpenAI",
+                ApiConfig.PROVIDER_COMPATIBLE to t.providerCompatible
+            ),
+            selected = selected,
+            onSelect = onSelect
+        )
+    }
+
+    /** Read-only dropdown backed by ExposedDropdownMenuBox. */
+    @OptIn(ExperimentalMaterial3Api::class)
+    @Composable
+    private fun DropdownField(
+        label: String,
+        options: List<Pair<String, String>>,
+        selected: String,
+        onSelect: (String) -> Unit
+    ) {
+        var expanded by remember { mutableStateOf(false) }
+        val selectedLabel = options.firstOrNull { it.first == selected }?.second ?: selected
+        ExposedDropdownMenuBox(
+            expanded = expanded,
+            onExpandedChange = { expanded = it }
+        ) {
+            OutlinedTextField(
+                value = selectedLabel,
+                onValueChange = {},
+                readOnly = true,
+                singleLine = true,
+                label = { Text(label) },
+                trailingIcon = { ExposedDropdownMenuDefaults.TrailingIcon(expanded = expanded) },
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .menuAnchor(MenuAnchorType.PrimaryNotEditable)
             )
-            FilterChip(
-                selected = selected == ApiConfig.PROVIDER_OPENAI,
-                onClick = { onSelect(ApiConfig.PROVIDER_OPENAI) },
-                label = { Text("OpenAI") }
-            )
-            FilterChip(
-                selected = selected == ApiConfig.PROVIDER_COMPATIBLE,
-                onClick = { onSelect(ApiConfig.PROVIDER_COMPATIBLE) },
-                label = { Text(t.providerCompatible) }
-            )
+            ExposedDropdownMenu(
+                expanded = expanded,
+                onDismissRequest = { expanded = false }
+            ) {
+                options.forEach { (value, lbl) ->
+                    DropdownMenuItem(
+                        text = { Text(lbl) },
+                        onClick = {
+                            onSelect(value)
+                            expanded = false
+                        }
+                    )
+                }
+            }
         }
     }
 
