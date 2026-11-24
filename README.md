@@ -4,6 +4,8 @@
 
 Recognition, translation and speech synthesis all go through **OpenAI-compatible APIs**. Each stage has its own provider / base URL / API key / model, so you can freely mix official services, third-party gateways or self-hosted models.
 
+English | [中文](README.zh_cn.md)
+
 ## Features
 
 - 🎧 **Two audio sources**
