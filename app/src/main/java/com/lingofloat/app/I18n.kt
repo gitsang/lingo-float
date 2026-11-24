@@ -54,6 +54,11 @@ class Strings(private val zh: Boolean) {
     val model get() = s("Model", "模型")
     val sourceLanguage get() = s("Source language (blank = auto-detect)", "源语言（留空自动检测）")
     val voice get() = s("Voice", "音色")
+    val ttsFormat get() = s("API format", "API 格式")
+    val ttsFormatHint get() = s(
+        "chat/completions is for audio-output models (MiMo-V2.5-TTS, gpt-4o-audio). MiMo voices: mimo_default, Chloe, Mia, 冰糖… Speech rate is ignored in this mode.",
+        "chat/completions 适用于音频输出模型（MiMo-V2.5-TTS、gpt-4o-audio）。MiMo 音色：mimo_default、Chloe、Mia、冰糖等；该模式下语速不生效。"
+    )
     val speedFmt get() = s("Speech rate: %.1fx", "语速：%.1fx")
     val providerCompatible get() = s("OpenAI-compatible", "OpenAI 兼容")
 

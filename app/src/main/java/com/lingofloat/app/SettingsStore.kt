@@ -32,12 +32,14 @@ data class ApiConfig(
     companion object {
         const val PROVIDER_SILICONFLOW = "siliconflow"
         const val PROVIDER_OPENAI = "openai"
+        const val PROVIDER_MIMO = "mimo"
         const val PROVIDER_COMPATIBLE = "compatible"
 
         /** Preset base URL for a provider; null keeps the current custom URL. */
         fun providerBase(provider: String): String? = when (provider) {
             PROVIDER_SILICONFLOW -> "https://api.siliconflow.cn/v1"
             PROVIDER_OPENAI -> "https://api.openai.com/v1"
+            PROVIDER_MIMO -> "https://api.xiaomimimo.com/v1"
             else -> null
         }
 
@@ -80,6 +82,7 @@ data class AppSettings(
     ),
     val ttsVoice: String = "alex",
     val ttsSpeed: Float = 1.0f,
+    val ttsFormat: String = "speech",
     val vadThreshold: Int = 300,
     val requestTimeoutSec: Int = 30
 ) {
@@ -114,6 +117,7 @@ class SettingsStore(context: Context) {
                 tts = ApiConfig.fromJson(o.optJSONObject("tts"), def.tts),
                 ttsVoice = o.optString("ttsVoice", def.ttsVoice),
                 ttsSpeed = o.optDouble("ttsSpeed", def.ttsSpeed.toDouble()).toFloat(),
+                ttsFormat = o.optString("ttsFormat", def.ttsFormat),
                 vadThreshold = o.optInt("vadThreshold", def.vadThreshold),
                 requestTimeoutSec = o.optInt("requestTimeoutSec", def.requestTimeoutSec)
             )
@@ -153,6 +157,7 @@ class SettingsStore(context: Context) {
             .put("tts", s.tts.toJson())
             .put("ttsVoice", s.ttsVoice)
             .put("ttsSpeed", s.ttsSpeed.toDouble())
+            .put("ttsFormat", s.ttsFormat)
             .put("vadThreshold", s.vadThreshold)
             .put("requestTimeoutSec", s.requestTimeoutSec)
         prefs.edit().putString("settings", o.toString()).apply()

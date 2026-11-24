@@ -169,7 +169,7 @@ class CaptionService : Service() {
         val whisper = WhisperClient(settings.whisper, settings.whisperLang, settings.requestTimeoutSec)
         val translator = TranslateClient(settings.translate, settings.targetLang, settings.requestTimeoutSec)
         val ttsClient = ttsPlayer?.let {
-            TtsClient(settings.tts, settings.ttsVoice, settings.ttsSpeed, settings.requestTimeoutSec)
+            TtsClient(settings.tts, settings.ttsVoice, settings.ttsSpeed, settings.requestTimeoutSec, settings.ttsFormat)
         }
         val segmenter = VadSegmenter(threshold = settings.vadThreshold)
         val events = Channel<CaptureEvent>(Channel.UNLIMITED)

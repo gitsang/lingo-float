@@ -1,5 +1,6 @@
 package com.lingofloat.app.api
 
+import android.util.Base64
 import com.lingofloat.app.ApiConfig
 import okhttp3.MediaType.Companion.toMediaType
 import okhttp3.MultipartBody
@@ -102,21 +103,38 @@ class TranslateClient(
     }
 }
 
-/** OpenAI-compatible /audio/speech (TTS); returns mp3 bytes. */
+/**
+ * TTS client supporting two OpenAI-style formats:
+ * - FORMAT_SPEECH: POST /audio/speech, binary mp3 response (standard TTS).
+ * - FORMAT_CHAT: POST /chat/completions with modalities ["text","audio"];
+ *   audio arrives base64-encoded in choices[0].message.audio.data
+ *   (gpt-4o-audio-preview, MiMo-Audio style audio-output chat models).
+ */
 class TtsClient(
     private val cfg: ApiConfig,
     private val voice: String,
     private val speed: Float,
-    private val timeoutSec: Int = 30
+    private val timeoutSec: Int = 30,
+    private val format: String = FORMAT_SPEECH
 ) {
-    fun synthesize(text: String): ByteArray {
+    companion object {
+        const val FORMAT_SPEECH = "speech"
+        const val FORMAT_CHAT = "chat"
+    }
+
+    fun synthesize(text: String): ByteArray =
+        if (format == FORMAT_CHAT) synthesizeChat(text) else synthesizeSpeech(text)
+
+    private fun voiceId(): String =
         // SiliconFlow expects "model:voice"; accept a bare voice name as well.
-        val voiceId = if (cfg.provider == ApiConfig.PROVIDER_SILICONFLOW && !voice.contains(":"))
+        if (cfg.provider == ApiConfig.PROVIDER_SILICONFLOW && !voice.contains(":"))
             "${cfg.model}:$voice" else voice
+
+    private fun synthesizeSpeech(text: String): ByteArray {
         val payload = JSONObject()
             .put("model", cfg.model)
             .put("input", text)
-            .put("voice", voiceId)
+            .put("voice", voiceId())
             .put("response_format", "mp3")
             .put("speed", speed.toDouble())
         val req = Http.auth(
@@ -130,6 +148,48 @@ class TtsClient(
                 throw IOException("TTS HTTP ${resp.code}: ${resp.body?.string()?.take(200)}")
             }
             return resp.body?.bytes() ?: throw IOException("TTS returned empty audio")
+        }
+    }
+
+    private fun synthesizeChat(text: String): ByteArray {
+        // MiMo-V2.5-TTS / gpt-4o-audio style: the text to speak MUST go in the
+        // assistant message; the user message carries style instructions only
+        // (its content is never spoken). Audio comes back as base64 wav.
+        val audio = JSONObject().put("format", "wav")
+        if (voice.isNotBlank()) audio.put("voice", voiceId())
+        val payload = JSONObject()
+            .put("model", cfg.model)
+            .put("modalities", JSONArray().put("text").put("audio"))
+            .put("audio", audio)
+            .put("stream", false)
+            .put("messages", JSONArray()
+                .put(JSONObject().put("role", "user").put(
+                    "content",
+                    "Read the assistant text aloud naturally and clearly, in its original language."
+                ))
+                .put(JSONObject().put("role", "assistant").put("content", text)))
+        val req = Http.auth(
+            Request.Builder()
+                .url(cfg.normalizedBase() + "/chat/completions")
+                .post(payload.toString().toRequestBody("application/json".toMediaType())),
+            cfg
+        ).build()
+        Http.clientFor(timeoutSec).newCall(req).execute().use { resp ->
+            val body = resp.body?.string().orEmpty()
+            if (!resp.isSuccessful) {
+                throw IOException("TTS HTTP ${resp.code}: ${body.take(200)}")
+            }
+            val data = JSONObject(body)
+                .optJSONArray("choices")
+                ?.optJSONObject(0)
+                ?.optJSONObject("message")
+                ?.optJSONObject("audio")
+                ?.optString("data")
+                .orEmpty()
+            if (data.isEmpty()) {
+                throw IOException("TTS chat response has no message.audio.data (model may not support audio output)")
+            }
+            return Base64.decode(data, Base64.DEFAULT)
         }
     }
 }

@@ -240,11 +240,41 @@ class MainActivity : ComponentActivity() {
             // ---- Speech synthesis ----
             SectionCard(t.speechSynthesis) {
                 ProviderRow(s.tts.provider, t) { p ->
-                    s = s.copy(tts = s.tts.copy(
+                    var cfg = s.tts.copy(
                         provider = p,
                         baseUrl = ApiConfig.providerBase(p) ?: s.tts.baseUrl
-                    ))
+                    )
+                    var fmt = s.ttsFormat
+                    var voice = s.ttsVoice
+                    when (p) {
+                        ApiConfig.PROVIDER_MIMO -> {
+                            cfg = cfg.copy(model = "mimo-v2.5-tts")
+                            voice = "mimo_default"
+                            fmt = "chat"
+                        }
+                        ApiConfig.PROVIDER_SILICONFLOW -> {
+                            if (cfg.model.startsWith("mimo")) {
+                                cfg = cfg.copy(model = "FunAudioLLM/CosyVoice2-0.5B")
+                                voice = "alex"
+                            }
+                            fmt = "speech"
+                        }
+                        ApiConfig.PROVIDER_OPENAI -> {
+                            if (cfg.model.startsWith("mimo")) {
+                                cfg = cfg.copy(model = "tts-1")
+                                voice = "alloy"
+                            }
+                            fmt = "speech"
+                        }
+                    }
+                    s = s.copy(tts = cfg, ttsFormat = fmt, ttsVoice = voice)
                 }
+                DropdownField(
+                    label = t.ttsFormat,
+                    options = listOf("speech" to "audio/speech", "chat" to "chat/completions"),
+                    selected = s.ttsFormat
+                ) { s = s.copy(ttsFormat = it) }
+                Text(t.ttsFormatHint, fontSize = 11.sp, color = Color.Gray)
                 ApiFields(s.tts, "FunAudioLLM/CosyVoice2-0.5B", t) { s = s.copy(tts = it) }
                 OutlinedTextField(
                     value = s.ttsVoice,
@@ -315,6 +345,7 @@ class MainActivity : ComponentActivity() {
             options = listOf(
                 ApiConfig.PROVIDER_SILICONFLOW to "SiliconFlow",
                 ApiConfig.PROVIDER_OPENAI to "OpenAI",
+                ApiConfig.PROVIDER_MIMO to "MiMo",
                 ApiConfig.PROVIDER_COMPATIBLE to t.providerCompatible
             ),
             selected = selected,

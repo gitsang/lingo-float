@@ -20,7 +20,7 @@ Recognition, translation and speech synthesis all go through **OpenAI-compatible
   | Translation | `POST /chat/completions` | `Qwen/Qwen2.5-7B-Instruct` |
   | Speech synthesis | `POST /audio/speech` | `FunAudioLLM/CosyVoice2-0.5B` |
 
-- 🏭 **Provider presets**: SiliconFlow (default), OpenAI, or any OpenAI-compatible endpoint — picking a provider fills the base URL, which stays editable
+- 🏭 **Provider presets**: SiliconFlow (default), OpenAI, MiMo, or any OpenAI-compatible endpoint — picking a provider fills the base URL, which stays editable; picking MiMo for TTS auto-configures the chat-completions format with `mimo-v2.5-tts`
 - ⏱️ **Request timeout protection**: hard cap on total request time (default 30s); a stuck request is skipped without blocking the pipeline
 - ✂️ **Sentence-level segmentation**: while you speak, the accumulated audio is probed with the STT API every ~1.5s; as soon as a complete sentence (。！？!?… etc.) appears it is sent to translation — no fixed-length chopping (60s safety valve only). The VAD noise floor tracks background audio so pauses end utterances cleanly
 - ⏳ **Readable pacing**: each (original, translation) pair is displayed together and held for at least 2 seconds before the next pair appears
@@ -100,6 +100,7 @@ Base URLs are filled up to `/v1` (a bare host gets `/v1` appended automatically)
 | OpenAI | `https://api.openai.com/v1` + `whisper-1` | same + `gpt-4o-mini` | same + `tts-1` |
 | Groq (very fast STT) | `https://api.groq.com/openai/v1` + `whisper-large-v3-turbo` | same + `llama-3.3-70b-versatile` | — |
 | Self-hosted faster-whisper | `http://<host>:8000/v1` + `Systran/faster-whisper-large-v3` | — | — |
+| Xiaomi MiMo (TTS) | — | — | `https://api.xiaomimimo.com/v1` + `mimo-v2.5-tts` (chat/completions format, voices: `mimo_default` / `Chloe` / `Mia` / `冰糖`…) |
 
 > Mix and match: e.g. Groq for recognition (fast), DeepSeek for translation (cheap), OpenAI for TTS (good voices).
 > For SiliconFlow TTS a bare voice name like `alex` is automatically sent as `FunAudioLLM/CosyVoice2-0.5B:alex`.
@@ -112,7 +113,7 @@ Base URLs are filled up to `/v1` (a bare host gets `/v1` appended automatically)
 - Sentence detection relies on the STT model emitting punctuation; models that rarely punctuate will fall back to utterance-level (silence-based) captions.
 - Probing re-transcribes the growing utterance every ~1.5s, so STT usage is higher than one-shot segmentation — fast/cheap models (SenseVoice, whisper-turbo) are recommended.
 - Display pacing adds up to 2s of intentional hold per sentence; during fast speech the display queue may lag behind the audio.
-- TTS requests `response_format=mp3`, supported by OpenAI and most compatible services.
+- TTS supports two formats, switchable per config: standard `POST /audio/speech` (binary mp3), or `POST /chat/completions` with `modalities:["text","audio"]` for audio-output models (MiMo-V2.5-TTS, gpt-4o-audio-preview). In chat mode the text to speak is placed in the **assistant** message (MiMo requirement; the user message carries style instructions only), audio is requested as wav and decoded from base64 `choices[0].message.audio.data`. Speech rate only applies to the `/audio/speech` format.
 
 ## Project structure
 
